@@ -1,0 +1,38 @@
+import discord
+from discord.ext import commands
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+TOKEN = os.getenv('DISCORD_TOKEN')
+MY_GUILD = discord.Object(id=1491481085018898514) # 這裡記得換成你的伺服器ID
+
+class MyBot(commands.Bot):
+    def __init__(self):
+        # Intents 的 message_content 記得要開
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(command_prefix='!', intents=intents)
+
+    # 把載入 Cogs 和註冊斜線指令都放在 setup_hook 裡
+    async def setup_hook(self):
+        # 1. 載入所有 Cogs
+        for filename in os.listdir('./cogs'):
+            if filename.endswith('.py'):
+                await self.load_extension(f'cogs.{filename[:-3]}')
+                print(f'成功載入模組: {filename}')
+        
+        # 2. 載入完後，一口氣把所有指令同步到測試伺服器
+        self.tree.copy_global_to(guild=MY_GUILD)
+        await self.tree.sync(guild=MY_GUILD)
+        print("斜線指令同步完成。")
+
+bot = MyBot()
+
+@bot.event
+async def on_ready():
+    print(f'{bot.user} 已經上線。')
+
+if __name__ == "__main__":
+    # 既然繼承了 commands.Bot，直接 run 就可以了
+    bot.run(TOKEN)
