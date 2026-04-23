@@ -227,7 +227,7 @@ class Calculator(commands.Cog):
     @app_commands.command(name="calc", description="終極工程計算機 (支援微積分、解方程式與教學)")
     @app_commands.describe(mode="選擇你要的計算類型", expression="輸入算式 (若查看介紹可不填)")
     @app_commands.choices(mode=[
-        app_commands.Choice(name="📖 查看語法介紹與教學", value="help"),
+        app_commands.Choice(name="查看語法介紹與教學", value="help"),
         app_commands.Choice(name="純數值計算(限數值, 含極限與虛數)", value="calc"),
         app_commands.Choice(name="代數運算(微積分, 展開, 因式分解)", value="algebra"),
         app_commands.Choice(name="解方程式找未知數(支援多變數)", value="solve"),
