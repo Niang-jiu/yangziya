@@ -5,7 +5,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
-MY_GUILD = discord.Object(id=1491481085018898514) # 這裡記得換成你的伺服器ID
+
+# 1️⃣ 在這裡放入你所有的伺服器 ID (用逗號隔開)
+GUILD_IDS = [
+    1491481085018898514,  # 第一個伺服器 ID
+    1439874209999491074   # 第二個伺服器 ID (請換成你真實的 ID)
+]
 
 class MyBot(commands.Bot):
     def __init__(self):
@@ -22,10 +27,13 @@ class MyBot(commands.Bot):
                 await self.load_extension(f'cogs.{filename[:-3]}')
                 print(f'成功載入模組: {filename}')
         
-        # 2. 載入完後，一口氣把所有指令同步到測試伺服器
-        self.tree.copy_global_to(guild=MY_GUILD)
-        await self.tree.sync(guild=MY_GUILD)
-        print("斜線指令同步完成。")
+        # 2️⃣ 利用迴圈，把指令同步到列表裡的所有伺服器
+        for guild_id in GUILD_IDS:
+            guild = discord.Object(id=guild_id)
+            self.tree.copy_global_to(guild=guild)
+            await self.tree.sync(guild=guild)
+            
+        print(f"斜線指令同步完成，已同步至 {len(GUILD_IDS)} 個伺服器。")
 
 bot = MyBot()
 
