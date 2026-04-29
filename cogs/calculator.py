@@ -224,7 +224,7 @@ class Calculator(commands.Cog):
             await message.reply(f"{result}")
 
     # 斜線指令 (/calc)
-    @app_commands.command(name="calc", description="終極工程計算機 (支援微積分、解方程式與教學)")
+    @app_commands.command(name="calc", description="計算機")
     @app_commands.describe(mode="選擇你要的計算類型", expression="輸入算式 (若查看介紹可不填)")
     @app_commands.choices(mode=[
         app_commands.Choice(name="查看語法介紹與教學", value="help"),
