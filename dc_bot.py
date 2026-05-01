@@ -11,7 +11,6 @@ GUILD_IDS = [
     1491481085018898514,  # 第一個伺服器 ID
     1439874209999491074   # 第二個伺服器 ID (請換成你真實的 ID)
 ]
-
 class MyBot(commands.Bot):
     def __init__(self):
         # Intents 的 message_content 記得要開
