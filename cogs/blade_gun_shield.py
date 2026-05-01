@@ -83,10 +83,10 @@ class BGSGameEngine:
         """產生 10x10 棋盤"""
         board = [["🔲" for _ in range(self.board_size)] for _ in range(self.board_size)]
         if self.p1.x == self.p2.x and self.p1.y == self.p2.y:
-            board[self.p1.y][self.p1.x] = "💥"
+            board[self.p1.y][self.p1.x] = "🩸"
         else:
-            board[self.p1.y][self.p1.x] = "🟦"
-            board[self.p2.y][self.p2.x] = "🟥"
+            board[self.p1.y][self.p1.x] = "🐶"
+            board[self.p2.y][self.p2.x] = "🐱"
             
         display = ""
         for row in board:
@@ -101,7 +101,7 @@ class BGSGameEngine:
 
         # 1. 衝突判定
         if p1_t == p2_t:
-            log.append("💥 **雙方目標為同一格，觸發近距離廝殺！卡牌效果全部失效！**")
+            log.append("🩸 **雙方目標為同一格，觸發近距離廝殺！卡牌效果全部失效！**")
             self.p1.x, self.p1.y = p1_t
             self.p2.x, self.p2.y = p2_t
             return self._resolve_clash(log)
@@ -135,7 +135,7 @@ class BGSGameEngine:
         p1_name = self.p1.user.display_name if self.p1.user != self.p2.user else "玩家1"
         p2_name = self.p2.user.display_name if self.p1.user != self.p2.user else "玩家2"
                 
-        log.append(f"🩸 廝殺結果：\n🟦 {p1_name} 剩餘血量: {self.p1.hp}\n🟥 {p2_name} 剩餘血量: {self.p2.hp}")
+        log.append(f"🩸 廝殺結果：\n🐶 {p1_name} 剩餘血量: {self.p1.hp}\n🐱 {p2_name} 剩餘血量: {self.p2.hp}")
         return self._end_turn(log)
 
     def _resolve_gun_movement(self, log: list):
@@ -143,7 +143,7 @@ class BGSGameEngine:
         p2_gun = self.p2.selected_card == "槍"
 
         if p1_gun and p2_gun and self._is_path_crossing():
-            log.append("🔥 **雙方持槍對衝！互相穿透並造成 4 點傷害！**")
+            log.append(" **雙方持槍對衝！互相穿透並造成 4 點傷害！**")
             self.p1.hp -= 4
             self.p2.hp -= 4
             self.p1.x, self.p1.y = self.p1.target_x, self.p1.target_y
@@ -381,7 +381,7 @@ class BGSMainView(discord.ui.View):
     @discord.ui.button(label="P1 決定行動", style=discord.ButtonStyle.primary, custom_id="bgs_action_p1")
     async def p1_action_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.engine.p1.user:
-            await interaction.response.send_message("你不是 🟦 玩家1！", ephemeral=True)
+            await interaction.response.send_message("你不是 🐶 玩家1！", ephemeral=True)
             return
         if self.engine.p1.action_submitted:
             await interaction.response.send_message("你已經決定過行動了！", ephemeral=True)
@@ -391,12 +391,12 @@ class BGSMainView(discord.ui.View):
     @discord.ui.button(label="P2 決定行動", style=discord.ButtonStyle.danger, custom_id="bgs_action_p2")
     async def p2_action_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.engine.p2.user:
-            await interaction.response.send_message("你不是 🟥 玩家2！", ephemeral=True)
+            await interaction.response.send_message("你不是 🐱 玩家2！", ephemeral=True)
             return
         if self.engine.p2.action_submitted:
             await interaction.response.send_message("你已經決定過行動了！", ephemeral=True)
             return
-        await interaction.response.send_message("請選擇要出的牌：", view=CardSelectView(self.engine.p2, self, "🟥 P2 "), ephemeral=True)
+        await interaction.response.send_message("請選擇要出的牌：", view=CardSelectView(self.engine.p2, self, "🐱 P2 "), ephemeral=True)
 
     async def check_turn_ready(self):
         if self.engine.p1.action_submitted and self.engine.p2.action_submitted:
@@ -410,8 +410,8 @@ class BGSMainView(discord.ui.View):
             
             status_text = (
                 f"\n{board_display}\n"
-                f"🟦 **[{p1_name}]** HP: {self.engine.p1.hp} | 座標: ({self.engine.p1.x}, {self.engine.p1.y}) | 手牌: {', '.join(self.engine.p1.cards)}\n"
-                f"🟥 **[{p2_name}]** HP: {self.engine.p2.hp} | 座標: ({self.engine.p2.x}, {self.engine.p2.y}) | 手牌: {', '.join(self.engine.p2.cards)}"
+                f"🐶 **[{p1_name}]** HP: {self.engine.p1.hp} | 座標: ({self.engine.p1.x}, {self.engine.p1.y}) | 手牌: {', '.join(self.engine.p1.cards)}\n"
+                f"🐱 **[{p2_name}]** HP: {self.engine.p2.hp} | 座標: ({self.engine.p2.x}, {self.engine.p2.y}) | 手牌: {', '.join(self.engine.p2.cards)}"
             )
             
             if res["status"] == "over":
@@ -443,11 +443,11 @@ class BladeGunShieldCog(commands.Cog):
         
         msg = (
             f"⚔️ **《刀槍盾》生死鬥開始！** ⚔️\n"
-            f"🟦 {p1_name} VS 🟥 {p2_name}\n"
+            f"🐶 {p1_name} VS 🐱 {p2_name}\n"
             f"滿血皆為 10 點。請點擊下方按鈕盲出你的牌與目標座標！\n\n"
             f"{board_display}\n"
-            f"🟦 **[P1]** 手牌: {', '.join(p1.cards)}\n"
-            f"🟥 **[P2]** 手牌: {', '.join(p2.cards)}"
+            f"🐶 **[P1]** 手牌: {', '.join(p1.cards)}\n"
+            f"🐱 **[P2]** 手牌: {', '.join(p2.cards)}"
         )
         
         await interaction.response.send_message(msg, view=view)
