@@ -253,23 +253,22 @@ class GridBladeButton(discord.ui.Button):
         self.direction = direction
 
     async def callback(self, interaction: discord.Interaction):
-        view: BGSMainView = self.view
-        current_actor = view.get_current_actor()
-        if interaction.user != current_actor.user:
-            await interaction.response.send_message("❌ 現在不是你的回合，不是你！", ephemeral=True)
-            return
+        view: ControlPanel = self.view
+        if interaction.user != view.player.user:
+            return await interaction.response.send_message("❌ 這不是你的面板！", ephemeral=True)
             
-        # 暗中防呆：沒這張牌只會彈出警告，對手看不見
-        if "刀" not in current_actor.cards:
-            await interaction.response.send_message("❌ 你手牌裡沒有【刀】！請換一個。", ephemeral=True)
-            return
+        if view.player.action_submitted:
+            return await interaction.response.send_message("❌ 你這回合已經出過招了，請看主畫面等待對手！", ephemeral=True)
+            
+        if "刀" not in view.player.cards:
+            return await interaction.response.send_message("❌ 你手牌裡沒有【刀】！請換一個。", ephemeral=True)
 
-        is_valid, msg = view.engine.validate_and_set_action(current_actor, "刀", self.direction)
+        is_valid, msg = view.main_view.engine.validate_and_set_action(view.player, "刀", self.direction)
         if not is_valid:
-            await interaction.response.send_message(f"❌ 撞牆啦！無效路線：{msg}", ephemeral=True)
-            return
+            return await interaction.response.send_message(f"❌ 撞牆啦！無效路線：{msg}", ephemeral=True)
 
-        await view.process_action_submission(interaction)
+        await interaction.response.edit_message(content=f"✅ 第 {view.main_view.engine.turn_count} 回合行動已鎖定：【刀】！\n請看主畫面等待結算...", view=view)
+        await view.main_view.check_both_submitted()
 
 class GridShieldButton(discord.ui.Button):
     def __init__(self, direction, row):
@@ -277,23 +276,22 @@ class GridShieldButton(discord.ui.Button):
         self.direction = direction
 
     async def callback(self, interaction: discord.Interaction):
-        view: BGSMainView = self.view
-        current_actor = view.get_current_actor()
-        if interaction.user != current_actor.user:
-            await interaction.response.send_message("❌ 現在不是你的回合，不是你！", ephemeral=True)
-            return
+        view: ControlPanel = self.view
+        if interaction.user != view.player.user:
+            return await interaction.response.send_message("❌ 這不是你的面板！", ephemeral=True)
             
-        # 暗中防呆
-        if "盾" not in current_actor.cards:
-            await interaction.response.send_message("❌ 你手牌裡沒有【盾】！請換一個。", ephemeral=True)
-            return
+        if view.player.action_submitted:
+            return await interaction.response.send_message("❌ 你這回合已經出過招了，請看主畫面等待對手！", ephemeral=True)
 
-        is_valid, msg = view.engine.validate_and_set_action(current_actor, "盾", self.direction)
+        if "盾" not in view.player.cards:
+            return await interaction.response.send_message("❌ 你手牌裡沒有【盾】！請換一個。", ephemeral=True)
+
+        is_valid, msg = view.main_view.engine.validate_and_set_action(view.player, "盾", self.direction)
         if not is_valid:
-            await interaction.response.send_message(f"❌ 撞牆啦！無效路線：{msg}", ephemeral=True)
-            return
+            return await interaction.response.send_message(f"❌ 撞牆啦！無效路線：{msg}", ephemeral=True)
 
-        await view.process_action_submission(interaction)
+        await interaction.response.edit_message(content=f"✅ 第 {view.main_view.engine.turn_count} 回合行動已鎖定：【盾】！\n請看主畫面等待結算...", view=view)
+        await view.main_view.check_both_submitted()
 
 class GridSpearButton(discord.ui.Button):
     def __init__(self, direction, row):
@@ -301,53 +299,49 @@ class GridSpearButton(discord.ui.Button):
         self.direction = direction
 
     async def callback(self, interaction: discord.Interaction):
-        view: BGSMainView = self.view
-        current_actor = view.get_current_actor()
-        if interaction.user != current_actor.user:
-            await interaction.response.send_message("❌ 現在不是你的回合，不是你！", ephemeral=True)
-            return
+        view: ControlPanel = self.view
+        if interaction.user != view.player.user:
+            return await interaction.response.send_message("❌ 這不是你的面板！", ephemeral=True)
             
-        # 暗中防呆
-        if "槍" not in current_actor.cards:
-            await interaction.response.send_message("❌ 你手牌裡沒有【槍】！請換一個。", ephemeral=True)
-            return
+        if view.player.action_submitted:
+            return await interaction.response.send_message("❌ 你這回合已經出過招了，請看主畫面等待對手！", ephemeral=True)
 
-        # 彈出 Modal 要求輸入距離 (對手看不到)
-        await interaction.response.send_modal(GunDistanceModal(current_actor, self.direction, view, view.engine.turn_count))
+        if "槍" not in view.player.cards:
+            return await interaction.response.send_message("❌ 你手牌裡沒有【槍】！請換一個。", ephemeral=True)
+
+        await interaction.response.send_modal(GunDistanceModal(view.player, self.direction, view.main_view, view, view.main_view.engine.turn_count))
 
 class GunDistanceModal(discord.ui.Modal):
     dist_input = discord.ui.TextInput(
         label='衝刺距離 (1-9)', placeholder='輸入 1~9', required=True, max_length=1
     )
 
-    def __init__(self, player, direction, main_view, turn_count):
+    def __init__(self, player, direction, main_view, control_view, turn_count):
         dir_names = {1: "向下", 2: "向右", 3: "向左", 4: "向上"}
         super().__init__(title=f'設定槍的衝刺距離 ({dir_names[direction]})')
         self.player = player
         self.direction = direction
         self.main_view = main_view
+        self.control_view = control_view
         self.turn_count = turn_count
 
     async def on_submit(self, interaction: discord.Interaction):
-        current_actor = self.main_view.get_current_actor()
-        if current_actor != self.player or self.main_view.engine.turn_count != self.turn_count:
-            await interaction.response.send_message("❌ 回合已過或不是你！", ephemeral=True)
-            return
+        if self.player.action_submitted or self.main_view.engine.turn_count != self.turn_count:
+            return await interaction.response.send_message("❌ 回合已過或已出招！", ephemeral=True)
 
         try:
             dist = int(self.dist_input.value)
             if dist < 1 or dist > 9:
                 raise ValueError
         except ValueError:
-            await interaction.response.send_message("輸入格式錯誤！距離需為 1~9。", ephemeral=True)
-            return
+            return await interaction.response.send_message("輸入格式錯誤！距離需為 1~9。", ephemeral=True)
 
         is_valid, msg = self.main_view.engine.validate_and_set_action(self.player, "槍", self.direction, dist)
         if not is_valid:
-            await interaction.response.send_message(f"❌ 撞牆啦！無效行動：{msg}", ephemeral=True)
-            return
+            return await interaction.response.send_message(f"❌ 撞牆啦！無效行動：{msg}", ephemeral=True)
 
-        await self.main_view.process_action_submission(interaction)
+        await interaction.response.edit_message(content=f"✅ 第 {self.turn_count} 回合行動已鎖定：【槍】(距離 {dist})！\n請看主畫面等待結算...", view=self.control_view)
+        await self.main_view.check_both_submitted()
 
 class GridEmptyButton(discord.ui.Button):
     def __init__(self, row):
@@ -363,23 +357,65 @@ class GridSurrenderButton(discord.ui.Button):
         super().__init__(label="\u200b", emoji="🏳️", style=discord.ButtonStyle.danger, row=row)
 
     async def callback(self, interaction: discord.Interaction):
-        view: BGSMainView = self.view
-        if interaction.user not in [view.engine.p1.user, view.engine.p2.user]:
-            await interaction.response.send_message("❌ 觀戰者不能幫忙投降！", ephemeral=True)
-            return
+        view: ControlPanel = self.view
+        if interaction.user != view.player.user:
+            return await interaction.response.send_message("❌ 這不是你的面板！", ephemeral=True)
 
-        view.game_over = True
-        if view.timer_task:
-            view.timer_task.cancel()
+        view.main_view.game_over = True
+        if view.main_view.timer_task:
+            view.main_view.timer_task.cancel()
 
         loser = interaction.user
-        winner = view.engine.p2 if loser == view.engine.p1.user else view.engine.p1
+        winner = view.main_view.engine.p2 if loser == view.main_view.engine.p1.user else view.main_view.engine.p1
 
-        view.last_log = [f"🏳️ **{loser.mention} 舉白旗投降！**\n🏆 **{winner.user.mention} 獲得勝利！**"]
-        view.update_buttons()
-        await interaction.response.edit_message(content=view.get_message_content(), view=view)
+        view.main_view.last_log = [f"🏳️ **{loser.mention} 舉白旗投降！**\n🏆 **{winner.user.mention} 獲得勝利！**"]
+        
+        await interaction.response.edit_message(content="🏳️ 你已投降。", view=view)
+        
+        # 套用安全編輯以防止 Webhook Token 過期
+        await view.main_view.safe_edit_main_message()
 
 
+# --- 隱藏操控面板 ---
+class ControlPanel(discord.ui.View):
+    def __init__(self, main_view, player):
+        super().__init__(timeout=None)
+        self.main_view = main_view
+        self.player = player
+        
+        # 建立九宮格按鈕
+        self.add_item(GridEmptyButton(0))
+        self.add_item(GridBladeButton(8, 0))
+        self.add_item(GridSpearButton(4, 0)) 
+        self.add_item(GridBladeButton(1, 0))
+        self.add_item(GridEmptyButton(0))
+
+        self.add_item(GridBladeButton(7, 1))
+        self.add_item(GridShieldButton(7, 1))
+        self.add_item(GridShieldButton(8, 1))
+        self.add_item(GridShieldButton(1, 1))
+        self.add_item(GridBladeButton(2, 1))
+
+        self.add_item(GridSpearButton(3, 2)) 
+        self.add_item(GridShieldButton(6, 2))
+        self.add_item(GridCenterButton(2, self.player, self.main_view.engine))
+        self.add_item(GridShieldButton(2, 2))
+        self.add_item(GridSpearButton(2, 2)) 
+
+        self.add_item(GridBladeButton(6, 3))
+        self.add_item(GridShieldButton(5, 3))
+        self.add_item(GridShieldButton(4, 3))
+        self.add_item(GridShieldButton(3, 3))
+        self.add_item(GridBladeButton(3, 3))
+
+        self.add_item(GridEmptyButton(4))
+        self.add_item(GridBladeButton(5, 4))
+        self.add_item(GridSpearButton(1, 4)) 
+        self.add_item(GridBladeButton(4, 4))
+        self.add_item(GridSurrenderButton(4))
+
+
+# --- 主公開面板 ---
 class BGSMainView(discord.ui.View):
     def __init__(self, engine: BGSGameEngine):
         super().__init__(timeout=None)
@@ -388,13 +424,6 @@ class BGSMainView(discord.ui.View):
         self.timer_task = None
         self.game_over = False
         self.last_log = ["⚔️ **《刀槍盾》生死鬥開始！** ⚔️\n(雙方盲出武器與座標，同時結算！)"]
-        
-        self.update_buttons()
-
-    def get_current_actor(self):
-        if not self.engine.p1.action_submitted: return self.engine.p1
-        if not self.engine.p2.action_submitted: return self.engine.p2
-        return None
 
     def get_message_content(self):
         board_display = self.engine.render_board()
@@ -410,104 +439,110 @@ class BGSMainView(discord.ui.View):
         full_text = "\n".join(self.last_log) + "\n" + status_text
 
         if not self.game_over:
-            curr_p = self.get_current_actor()
-            if curr_p:
-                p_emoji = "🐶" if curr_p == self.engine.p1 else "🐱"
-                full_text += f"\n\n➡️ **現在輪到 {p_emoji} {curr_p.user.mention} 選擇行動 (限時30秒)**"
-                full_text += "\n直接點擊下方對應的武器圖示即可盲出行動！(沒有對應武器請勿點擊)"
+            unsubmitted = []
+            if not self.engine.p1.action_submitted: unsubmitted.append("🐶")
+            if not self.engine.p2.action_submitted: unsubmitted.append("🐱")
+            
+            if unsubmitted:
+                full_text += f"\n\n⏳ **等待出招中：{' '.join(unsubmitted)}**"
+            full_text += "\n\n(請點擊下方按鈕喚出你的專屬面板，並在面板上出招！)"
 
         return full_text
 
-    def update_buttons(self):
-        self.clear_items()
-        if self.game_over:
+    async def safe_edit_main_message(self):
+        """核心續命邏輯：安全更新主畫面，突破 15 分鐘 Webhook Token 限制"""
+        if not self.message:
             return
 
-        curr_p = self.get_current_actor()
-        if not curr_p: return 
+        content = self.get_message_content()
+        try:
+            # 優先嘗試原本的編輯方式 (速度較快，適用於前 15 分鐘)
+            await self.message.edit(content=content, view=self)
+        except discord.HTTPException as e:
+            # 50027: Invalid Webhook Token, 401: Unauthorized, 404: Not Found
+            if e.code == 50027 or e.status in (401, 404): 
+                try:
+                    # Token 過期了！改用 Bot 自身權限直接抓取頻道訊息並編輯
+                    channel = self.message.channel
+                    new_msg = await channel.fetch_message(self.message.id)
+                    await new_msg.edit(content=content, view=self)
+                    self.message = new_msg  # 更新記憶體內的物件
+                except Exception as fetch_e:
+                    print(f"[BGS] 續命失敗: {fetch_e}")
+            else:
+                print(f"[BGS] 未知的編輯錯誤: {e}")
+        except Exception as e:
+            print(f"[BGS] 發生錯誤: {e}")
 
-        # 取消變灰防呆，所有的按鈕一律保持 disabled=False
-        # 第 0 排 (最上方)
-        self.add_item(GridEmptyButton(0))
-        self.add_item(GridBladeButton(8, 0))
-        self.add_item(GridSpearButton(4, 0)) # 向上 4
-        self.add_item(GridBladeButton(1, 0))
-        self.add_item(GridEmptyButton(0))
+    @discord.ui.button(label="🐶 喚出狗玩家面板", style=discord.ButtonStyle.secondary)
+    async def spawn_dog_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.engine.p1.user:
+            return await interaction.response.send_message("❌ 你不是狗玩家喔！", ephemeral=True)
+        panel = ControlPanel(self, self.engine.p1)
+        await interaction.response.send_message(
+            "🎮 **這是你的專屬操控面板**\n請直接在這裡點擊出招！出招後請看主畫面等待對手。", 
+            view=panel, 
+            ephemeral=True
+        )
 
-        # 第 1 排
-        self.add_item(GridBladeButton(7, 1))
-        self.add_item(GridShieldButton(7, 1))
-        self.add_item(GridShieldButton(8, 1))
-        self.add_item(GridShieldButton(1, 1))
-        self.add_item(GridBladeButton(2, 1))
-
-        # 第 2 排 (中間排)
-        self.add_item(GridSpearButton(3, 2)) # 向左 3
-        self.add_item(GridShieldButton(6, 2))
-        self.add_item(GridCenterButton(2, curr_p, self.engine)) # 中間頭像
-        self.add_item(GridShieldButton(2, 2))
-        self.add_item(GridSpearButton(2, 2)) # 向右 2
-
-        # 第 3 排
-        self.add_item(GridBladeButton(6, 3))
-        self.add_item(GridShieldButton(5, 3))
-        self.add_item(GridShieldButton(4, 3))
-        self.add_item(GridShieldButton(3, 3))
-        self.add_item(GridBladeButton(3, 3))
-
-        # 第 4 排 (最下方)
-        self.add_item(GridEmptyButton(4))
-        self.add_item(GridBladeButton(5, 4))
-        self.add_item(GridSpearButton(1, 4)) # 向下 1
-        self.add_item(GridBladeButton(4, 4))
-        self.add_item(GridSurrenderButton(4)) # 右下角放投降
+    @discord.ui.button(label="🐱 喚出貓玩家面板", style=discord.ButtonStyle.secondary)
+    async def spawn_cat_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.engine.p2.user:
+            return await interaction.response.send_message("❌ 你不是貓玩家喔！", ephemeral=True)
+        panel = ControlPanel(self, self.engine.p2)
+        await interaction.response.send_message(
+            "🎮 **這是你的專屬操控面板**\n請直接在這裡點擊出招！出招後請看主畫面等待對手。", 
+            view=panel, 
+            ephemeral=True
+        )
 
     async def start_timer(self):
         turn_now = self.engine.turn_count
-        actor_now = self.get_current_actor()
         try:
             await asyncio.sleep(30)
         except asyncio.CancelledError:
             return 
             
-        if not self.game_over and self.engine.turn_count == turn_now and self.get_current_actor() == actor_now:
-            self.engine.force_random_action(actor_now)
-            await self.process_action_submission(timeout_actor=actor_now)
+        if not self.game_over and self.engine.turn_count == turn_now:
+            timeout_msgs = []
+            # 誰沒提交就強制幫誰出招
+            if not self.engine.p1.action_submitted:
+                self.engine.force_random_action(self.engine.p1)
+                timeout_msgs.append(f"⏳ **{self.engine.p1.user.display_name} 思考超時！系統已強制隨機代打！**")
+            if not self.engine.p2.action_submitted:
+                self.engine.force_random_action(self.engine.p2)
+                timeout_msgs.append(f"⏳ **{self.engine.p2.user.display_name} 思考超時！系統已強制隨機代打！**")
+            
+            await self.check_both_submitted(timeout_msgs)
 
-    async def process_action_submission(self, interaction: discord.Interaction = None, timeout_actor: Player = None):
-        current_task = asyncio.current_task()
-        if self.timer_task and self.timer_task != current_task:
-            self.timer_task.cancel()
-
-        timeout_msg = None
-        if timeout_actor:
-            timeout_msg = f"⏳ **{timeout_actor.user.display_name} 思考超時！系統已強制隨機代打！**"
-
+    async def check_both_submitted(self, timeout_msgs=None):
         if self.engine.p1.action_submitted and self.engine.p2.action_submitted:
             # 雙方皆已提交，同時結算！
             res = self.engine.resolve_turn()
             self.last_log = res["log"]
-            if timeout_msg:
-                self.last_log.insert(1, timeout_msg)
+            if timeout_msgs:
+                self.last_log = timeout_msgs + self.last_log
             if res["status"] == "over":
                 self.game_over = True
+            
+            # 使用安全續命編輯
+            await self.safe_edit_main_message()
+            
+            # 進入下一回合重置計時器
+            if self.timer_task:
+                self.timer_task.cancel()
+            if not self.game_over:
+                self.timer_task = asyncio.create_task(self.start_timer())
         else:
-            # P1 已提交，換 P2
-            if timeout_msg:
-                self.last_log = [timeout_msg, f"✅ **{self.engine.p1.user.display_name}** 已鎖定行動，換 **{self.engine.p2.user.display_name}** 選擇！"]
+            # 只有一人提交
+            actor = self.engine.p1 if self.engine.p1.action_submitted else self.engine.p2
+            if timeout_msgs:
+                 self.last_log = timeout_msgs + [f"✅ **{actor.user.display_name}** 已鎖定行動，等待對手..."]
             else:
-                self.last_log = [f"✅ **{self.engine.p1.user.display_name}** 已鎖定行動，換 **{self.engine.p2.user.display_name}** 選擇！"]
-
-        self.update_buttons()
-        content = self.get_message_content()
-        
-        if interaction:
-            await interaction.response.edit_message(content=content, view=self)
-        else:
-            await self.message.edit(content=content, view=self)
-
-        if not self.game_over:
-            self.timer_task = asyncio.create_task(self.start_timer())
+                 self.last_log = [f"✅ **{actor.user.display_name}** 已鎖定行動，等待對手..."]
+                 
+            # 使用安全續命編輯
+            await self.safe_edit_main_message()
 
 
 class BladeGunShieldCog(commands.Cog):
