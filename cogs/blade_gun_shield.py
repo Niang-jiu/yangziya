@@ -24,6 +24,10 @@ class Player:
         self.target_x = x
         self.target_y = y
         
+        # 記錄每次行動的向量，用來判定面向與盾牌擊退方向
+        self.move_dx = 0
+        self.move_dy = 0
+        
         self.is_shielded = False
         self.has_reflected = False
         self.facing = None 
@@ -79,11 +83,16 @@ class BGSGameEngine:
         dx = player.target_x - player.x
         dy = player.target_y - player.y
         
-        if card == "刀":
-            if abs(dy) > abs(dx):
-                player.facing = "UP" if dy < 0 else "DOWN"
-            else:
-                player.facing = "LEFT" if dx < 0 else "RIGHT"
+        # 記錄移動向量與判定面向
+        player.move_dx = dx
+        player.move_dy = dy
+        
+        if abs(dy) > abs(dx):
+            player.facing = "UP" if dy < 0 else "DOWN"
+        elif abs(dx) > abs(dy):
+            player.facing = "LEFT" if dx < 0 else "RIGHT"
+        elif dx != 0:
+            player.facing = "LEFT" if dx < 0 else "RIGHT"
                 
         return True, ""
 
@@ -95,7 +104,7 @@ class BGSGameEngine:
                 distance = 1
             else:
                 direction = random.randint(1, 4)
-                distance = random.randint(1, 9)
+                distance = random.randint(1, 4)
                 
             is_valid, _ = self.validate_and_set_action(player, card, direction, distance)
             if is_valid:
@@ -112,10 +121,10 @@ class BGSGameEngine:
         for y in range(self.board_size):
             row = []
             for x in range(self.board_size):
-                if x < min_bound or x > max_bound or y < min_bound or y > max_bound:
-                    row.append("🟩") 
-                elif (x, y) in self.items_on_board:
+                if (x, y) in self.items_on_board:
                     row.append(item_emojis[self.items_on_board[(x, y)]])
+                elif x < min_bound or x > max_bound or y < min_bound or y > max_bound:
+                    row.append("🟩") 
                 elif (x, y) in self.fire_zones:
                     row.append("🔥")
                 else:
@@ -154,11 +163,11 @@ class BGSGameEngine:
                     log.append(f"🔥 **{p.user.display_name} 丟出了燃燒彈！座標 ({tx}, {ty}) 周圍燒了起來！**")
                 elif item_name == "冰凍術":
                     enemy = self.p2 if p == self.p1 else self.p1
-                    if enemy.x == tx and enemy.y == ty:
+                    if abs(enemy.target_x - tx) <= 1 and abs(enemy.target_y - ty) <= 1:
                         enemy.is_frozen = True
                         enemy.selected_card = "被冰封"
                         enemy.target_x, enemy.target_y = enemy.x, enemy.y
-                        log.append(f"🧊 **{p.user.display_name} 的冰凍術命中目標！{enemy.user.display_name} 本回合無法行動！**")
+                        log.append(f"🧊 **{p.user.display_name} 成功預判！冰凍術命中目標！{enemy.user.display_name} 本回合無法行動！**")
                     else:
                         log.append(f"🧊 **{p.user.display_name} 的冰凍術砸空了！**")
             p.queued_items.clear()
@@ -166,7 +175,7 @@ class BGSGameEngine:
         p1_t = (self.p1.target_x, self.p1.target_y)
         p2_t = (self.p2.target_x, self.p2.target_y)
 
-        # 1. 衝突判定 (含暗黑穿越)
+        # 1. 衝突判定
         if p1_t == p2_t:
             self.p1.x, self.p1.y = p1_t
             self.p2.x, self.p2.y = p2_t
@@ -210,7 +219,6 @@ class BGSGameEngine:
     def _resolve_clash(self, log: list):
         log.append("🩸 **雙方踩入同一格，觸發近距離廝殺！卡牌效果失效！**")
         
-        # 檢查該格道具
         if (self.p1.x, self.p1.y) in self.items_on_board:
             item = self.items_on_board.pop((self.p1.x, self.p1.y))
             if item == "回血心":
@@ -245,7 +253,19 @@ class BGSGameEngine:
         p1_gun = self.p1.selected_card == "槍"
         p2_gun = self.p2.selected_card == "槍"
 
-        if p1_gun and p2_gun and self._is_path_crossing():
+        # 檢查面對面對衝
+        is_face_to_face = False
+        if p1_gun and p2_gun:
+            if self.p1.facing == "UP" and self.p2.facing == "DOWN" and self.p1.x == self.p2.x and self.p1.y > self.p2.y and self.p1.target_y <= self.p2.target_y:
+                is_face_to_face = True
+            elif self.p1.facing == "DOWN" and self.p2.facing == "UP" and self.p1.x == self.p2.x and self.p1.y < self.p2.y and self.p1.target_y >= self.p2.target_y:
+                is_face_to_face = True
+            elif self.p1.facing == "LEFT" and self.p2.facing == "RIGHT" and self.p1.y == self.p2.y and self.p1.x > self.p2.x and self.p1.target_x <= self.p2.target_x:
+                is_face_to_face = True
+            elif self.p1.facing == "RIGHT" and self.p2.facing == "LEFT" and self.p1.y == self.p2.y and self.p1.x < self.p2.x and self.p1.target_x >= self.p2.target_x:
+                is_face_to_face = True
+
+        if is_face_to_face:
             log.append("💥 **雙方持槍對衝！互相穿透並受到重創！**")
             p1_dmg = 8 if self.p1.has_damage_buff else 4
             p2_dmg = 8 if self.p2.has_damage_buff else 4
@@ -259,41 +279,60 @@ class BGSGameEngine:
             self.p2.x, self.p2.y = self.p2.target_x, self.p2.target_y
             return
 
-        for p, enemy in [(self.p1, self.p2), (self.p2, self.p1)]:
-            if p.selected_card == "槍":
-                dx = 1 if p.target_x > p.x else (-1 if p.target_x < p.x else 0)
-                dy = 1 if p.target_y > p.y else (-1 if p.target_y < p.y else 0)
+        # 若非對衝，則進行逐格模擬，確保只攻擊前方的敵人
+        def get_gun_params(p):
+            dx = 1 if p.target_x > p.x else (-1 if p.target_x < p.x else 0)
+            dy = 1 if p.target_y > p.y else (-1 if p.target_y < p.y else 0)
+            dist = max(abs(p.target_x - p.x), abs(p.target_y - p.y))
+            return dx, dy, dist
+            
+        p1_dx, p1_dy, p1_dist = get_gun_params(self.p1) if p1_gun else (0,0,0)
+        p2_dx, p2_dy, p2_dist = get_gun_params(self.p2) if p2_gun else (0,0,0)
+        
+        p1_stopped = not p1_gun
+        p2_stopped = not p2_gun
+        
+        max_dist = max(p1_dist, p2_dist)
+        
+        for step in range(1, max_dist + 1):
+            p1_next_x = self.p1.x + p1_dx if not p1_stopped and step <= p1_dist else self.p1.x
+            p1_next_y = self.p1.y + p1_dy if not p1_stopped and step <= p1_dist else self.p1.y
+            
+            p2_next_x = self.p2.x + p2_dx if not p2_stopped and step <= p2_dist else self.p2.x
+            p2_next_y = self.p2.y + p2_dy if not p2_stopped and step <= p2_dist else self.p2.y
+            
+            p1_hits = False
+            p2_hits = False
+            
+            if not p1_stopped and step <= p1_dist:
+                if (p1_next_x == self.p2.x and p1_next_y == self.p2.y) or (p1_next_x == p2_next_x and p1_next_y == p2_next_y):
+                    p1_hits = True
+            
+            if not p2_stopped and step <= p2_dist:
+                if (p2_next_x == self.p1.x and p2_next_y == self.p1.y) or (p2_next_x == p1_next_x and p2_next_y == p1_next_y):
+                    p2_hits = True
+                    
+            if p1_hits:
+                self.p1.gun_hit_enemy = True
+                p1_stopped = True
+                p_name = "🐶 " + self.p1.user.display_name
+                log.append(f"📌 {p_name} 衝刺撞到對手，停在了 ({self.p1.x}, {self.p1.y})")
                 
-                curr_x, curr_y = p.x, p.y
-                hit = False
+            if p2_hits:
+                self.p2.gun_hit_enemy = True
+                p2_stopped = True
+                p_name = "🐱 " + self.p2.user.display_name
+                log.append(f"📌 {p_name} 衝刺撞到對手，停在了 ({self.p2.x}, {self.p2.y})")
                 
-                while (curr_x, curr_y) != (p.target_x, p.target_y):
-                    curr_x += dx
-                    curr_y += dy
-                    if curr_x == enemy.x and curr_y == enemy.y:
-                        hit = True
-                        p.gun_hit_enemy = True
-                        p.x = curr_x - dx if dx != 0 else curr_x
-                        p.y = curr_y - dy if dy != 0 else curr_y
-                        p_name = "🐶 " + p.user.display_name if p == self.p1 else "🐱 " + p.user.display_name
-                        log.append(f"📌 {p_name} 衝刺撞到對手，停在了 ({p.x}, {p.y})")
-                        break
-                
-                if not hit:
-                    p.x, p.y = p.target_x, p.target_y
-                    p_name = "🐶 " + p.user.display_name if p == self.p1 else "🐱 " + p.user.display_name
-                    log.append(f"💨 {p_name} 持槍衝刺至 ({p.x}, {p.y})")
+            if not p1_stopped and step <= p1_dist and not p1_hits:
+                self.p1.x, self.p1.y = p1_next_x, p1_next_y
+            if not p2_stopped and step <= p2_dist and not p2_hits:
+                self.p2.x, self.p2.y = p2_next_x, p2_next_y
 
-    def _is_path_crossing(self):
-        if self.p1.y == self.p2.y and self.p1.target_y == self.p2.target_y:
-            if min(self.p1.x, self.p1.target_x) <= max(self.p2.x, self.p2.target_x) and \
-               max(self.p1.x, self.p1.target_x) >= min(self.p2.x, self.p2.target_x):
-                return True
-        if self.p1.x == self.p2.x and self.p1.target_x == self.p2.target_x:
-            if min(self.p1.y, self.p1.target_y) <= max(self.p2.y, self.p2.target_y) and \
-               max(self.p1.y, self.p1.target_y) >= min(self.p2.y, self.p2.target_y):
-                return True
-        return False
+        for p in [self.p1, self.p2]:
+            if p.selected_card == "槍" and not getattr(p, 'gun_hit_enemy', False):
+                p_name = "🐶 " + p.user.display_name if p == self.p1 else "🐱 " + p.user.display_name
+                log.append(f"💨 {p_name} 持槍衝刺至 ({p.x}, {p.y})")
 
     def _resolve_attacks(self, log: list):
         for p, enemy in [(self.p1, self.p2), (self.p2, self.p1)]:
@@ -340,18 +379,54 @@ class BGSGameEngine:
                     action_text = "黑暗力量爆發" if p.selected_card == "暗黑穿越" else "命中了"
                     log.append(f"⚔️ {p_name} {action_text}！對 {e_name} 造成 {dmg} 點傷害！")
 
-        # 未受攻擊的盾牌範圍傷害
+        # 未受攻擊的盾牌範圍傷害 (含擊退與撞牆判定) - 統一收集後再結算
+        shield_hits = []
         for p, enemy in [(self.p1, self.p2), (self.p2, self.p1)]:
             if p.selected_card == "盾" and not getattr(p, 'has_reflected', False):
                 if abs(enemy.x - p.x) <= 1 and abs(enemy.y - p.y) <= 1:
                     # 不在同一格才觸發掃蕩
                     if not (enemy.x == p.x and enemy.y == p.y):
-                        sweep_dmg = 2 if p.has_damage_buff else 1
-                        enemy.hp -= sweep_dmg
-                        if p.has_damage_buff: p.has_damage_buff = False
-                        p_name = "🐶 " + p.user.display_name if p == self.p1 else "🐱 " + p.user.display_name
-                        e_name = "🐶 " + enemy.user.display_name if enemy == self.p1 else "🐱 " + enemy.user.display_name
-                        log.append(f"💨 {p_name} 的盾牌未受攻擊，釋放了衝擊波！對周圍的 {e_name} 造成 {sweep_dmg} 點傷害！")
+                        shield_hits.append((p, enemy))
+
+        for p, enemy in shield_hits:
+            sweep_dmg = 2 if p.has_damage_buff else 1
+            enemy.hp -= sweep_dmg
+            if p.has_damage_buff: p.has_damage_buff = False
+            
+            # --- 擊退與撞牆邏輯 ---
+            kb_dx = p.move_dx
+            kb_dy = p.move_dy
+            
+            # 標準化為單位向量以防萬一
+            if kb_dx != 0: kb_dx //= abs(kb_dx)
+            if kb_dy != 0: kb_dy //= abs(kb_dy)
+            
+            hit_wall = False
+            actual_push = 0
+            # 固定推 3 格
+            for step in range(3):
+                next_x = enemy.x + kb_dx
+                next_y = enemy.y + kb_dy
+                if 0 <= next_x < self.board_size and 0 <= next_y < self.board_size:
+                    enemy.x = next_x
+                    enemy.y = next_y
+                    enemy.target_x = next_x
+                    enemy.target_y = next_y
+                    actual_push += 1
+                else:
+                    hit_wall = True
+                    break # 撞到牆就停下來
+            
+            wall_msg = ""
+            if hit_wall:
+                enemy.hp -= 1
+                wall_msg = "，並狠狠撞上邊界額外受到 1 點傷害！"
+            else:
+                wall_msg = "！"
+                
+            p_name = "🐶 " + p.user.display_name if p == self.p1 else "🐱 " + p.user.display_name
+            e_name = "🐶 " + enemy.user.display_name if enemy == self.p1 else "🐱 " + enemy.user.display_name
+            log.append(f"💨 {p_name} 的盾牌未受攻擊釋放衝擊波！對 {e_name} 造成 {sweep_dmg} 點傷害，並往移動方向擊退 {actual_push} 格{wall_msg}")
 
     def _end_turn(self, log: list):
         shrink_level = self.turn_count // 8
@@ -359,18 +434,15 @@ class BGSGameEngine:
         max_bound = self.board_size - 1 - shrink_level
         
         for p in [self.p1, self.p2]:
-            # 踩上燃燒區獲得持續燃燒狀態
             if (p.x, p.y) in self.fire_zones:
                 if p.burn_turns < 3:
                     p.burn_turns = 3
             
-            # 結算燃燒傷害
             if p.burn_turns > 0:
                 p.hp -= 1
                 p.burn_turns -= 1
                 log.append(f"🔥 **{p.user.display_name} 受到 1 點燃燒傷害！(剩餘 {p.burn_turns} 回合)**")
                 
-            # 結算毒圈傷害
             if shrink_level > 0:
                 if p.x < min_bound or p.x > max_bound or p.y < min_bound or p.y > max_bound:
                     p.hp -= 1
@@ -387,7 +459,7 @@ class BGSGameEngine:
             return {"status": "over", "log": log}
         
         self.turns_since_last_item += 1
-        if random.random() < 0.05 or self.turns_since_last_item >= 6:
+        if random.random() < 0.20 or self.turns_since_last_item >= 5:
             available_spots = [(x, y) for x in range(self.board_size) for y in range(self.board_size) 
                                if (x, y) not in [(self.p1.x, self.p1.y), (self.p2.x, self.p2.y)] and (x, y) not in self.items_on_board]
             if available_spots:
@@ -470,7 +542,7 @@ class GridSpearButton(discord.ui.Button):
 
 class GunDistanceModal(discord.ui.Modal):
     dist_input = discord.ui.TextInput(
-        label='衝刺距離 (1-9)', placeholder='輸入 1~9', required=True, max_length=1
+        label='衝刺距離 (1-4)', placeholder='輸入 1~4', required=True, max_length=1
     )
 
     def __init__(self, player, direction, main_view, control_view, turn_count):
@@ -489,9 +561,9 @@ class GunDistanceModal(discord.ui.Modal):
 
         try:
             dist = int(self.dist_input.value)
-            if dist < 1 or dist > 9: raise ValueError
+            if dist < 1 or dist > 4: raise ValueError 
         except ValueError:
-            return await interaction.response.send_message("輸入格式錯誤！距離需為 1~9。", ephemeral=True)
+            return await interaction.response.send_message("輸入格式錯誤！距離需為 1~4。", ephemeral=True)
 
         is_valid, msg = self.main_view.engine.validate_and_set_action(self.player, "槍", self.direction, dist)
         if not is_valid: return await interaction.response.send_message(f"不能出界ㄛ!：{msg}", ephemeral=True)
@@ -531,7 +603,6 @@ class GridSurrenderButton(discord.ui.Button):
 
 class ItemFixedButton(discord.ui.Button):
     def __init__(self, item_name, row, emoji, player):
-        # 永遠保持正常狀態，不使用 self.disabled = True
         super().__init__(emoji=emoji, style=discord.ButtonStyle.secondary, row=row)
         self.item_name = item_name
         self.player = player
@@ -545,11 +616,9 @@ class ItemFixedButton(discord.ui.Button):
         if interaction.user != p.user: 
             return await interaction.response.send_message("這不是你的面板！", ephemeral=True)
         
-        # 點擊時才檢查，沒有就直接跟他說沒有，省去刷新面板的麻煩
         if self.item_name not in p.items:
             return await interaction.response.send_message(f"你沒有 {self.item_name}！", ephemeral=True)
         
-        # 如果有道具，就正常彈出輸入座標的視窗
         await interaction.response.send_modal(TargetingModal(p, self.item_name, view))
 
 
@@ -590,6 +659,18 @@ class TargetingModal(discord.ui.Modal):
             self.player.target_x = target_x
             self.player.target_y = target_y
             self.player.action_submitted = True
+            
+            # 暗黑穿越的瞬移距離一樣記錄，並同步更新面向
+            self.player.move_dx = target_x - self.player.x
+            self.player.move_dy = target_y - self.player.y
+            dx, dy = self.player.move_dx, self.player.move_dy
+            if abs(dy) > abs(dx):
+                self.player.facing = "UP" if dy < 0 else "DOWN"
+            elif abs(dx) > abs(dy):
+                self.player.facing = "LEFT" if dx < 0 else "RIGHT"
+            elif dx != 0:
+                self.player.facing = "LEFT" if dx < 0 else "RIGHT"
+            
             self.player.items.remove(self.item_name)
             
             await self.control_view.main_view.safe_edit_main_message()
@@ -604,7 +685,7 @@ class ControlPanel(discord.ui.View):
         self.main_view = main_view
         self.player = player
 
-        # --- Row 0 --- 左上固定為暗黑穿越，右上固定為燃燒彈
+        # --- Row 0 --- 
         self.add_item(ItemFixedButton("暗黑穿越", 0, "✴️", self.player))
         self.add_item(GridBladeButton(8, 0))
         self.add_item(GridSpearButton(4, 0)) 
@@ -632,12 +713,12 @@ class ControlPanel(discord.ui.View):
         self.add_item(GridShieldButton(3, 3))
         self.add_item(GridBladeButton(3, 3))
 
-        # --- Row 4 --- 左下固定為冰凍術，右下放投降
+        # --- Row 4 --- 
         self.add_item(ItemFixedButton("冰凍術", 4, "🧊", self.player))
         self.add_item(GridBladeButton(5, 4))
         self.add_item(GridSpearButton(1, 4)) 
         self.add_item(GridBladeButton(4, 4))
-        self.add_item(GridSurrenderButton(4)) # 把投降加回來啦！
+        self.add_item(GridSurrenderButton(4))
 
 
 # --- 主公開面板 ---
@@ -778,8 +859,8 @@ class BladeGunShieldCog(commands.Cog):
         
         await interaction.response.defer()
         
-        p1 = Player(interaction.user, 0, 0)
-        p2 = Player(opponent, 9, 9)
+        p1 = Player(interaction.user, 2, 2)
+        p2 = Player(opponent, 7, 7)
         engine = BGSGameEngine(p1, p2)
         view = BGSMainView(engine)
         
