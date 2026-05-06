@@ -9,13 +9,17 @@ import asyncio
 class Player:
     def __init__(self, user: discord.Member, x: int, y: int):
         self.user = user
-        self.hp = 10
+        self.hp = 15
         self.x = x
         self.y = y
         self.has_damage_buff = False
-        self.cards = ["刀", "槍", "盾"]
-        self.items = [] # 只會存放 暗黑穿越、燃燒彈、冰凍術
         
+        # 開局給滿 3 張牌，初始 CD 為 0
+        self.cards = ["刀", "槍", "盾"]
+        self.draw_cooldown = 0
+        self.has_overdrafted = False # 透支鎖
+        
+        self.items = [] # 存放 暗黑穿越、燃燒彈、冰凍術
         self.queued_items = [] 
         self.is_frozen = False 
         self.burn_turns = 0    
@@ -24,7 +28,6 @@ class Player:
         self.target_x = x
         self.target_y = y
         
-        # 記錄每次行動的向量，用來判定面向與盾牌擊退方向
         self.move_dx = 0
         self.move_dy = 0
         
@@ -83,10 +86,6 @@ class BGSGameEngine:
         dx = player.target_x - player.x
         dy = player.target_y - player.y
         
-        # 記錄移動向量與判定面向
-        player.move_dx = dx
-        player.move_dy = dy
-        
         if abs(dy) > abs(dx):
             player.facing = "UP" if dy < 0 else "DOWN"
         elif abs(dx) > abs(dy):
@@ -97,6 +96,12 @@ class BGSGameEngine:
         return True, ""
 
     def force_random_action(self, player: Player):
+        if len(player.cards) == 0:
+            player.selected_card = "待機"
+            player.target_x, player.target_y = player.x, player.y
+            player.action_submitted = True
+            return
+            
         while True:
             card = random.choice(player.cards)
             if card in ["刀", "盾"]:
@@ -108,6 +113,7 @@ class BGSGameEngine:
                 
             is_valid, _ = self.validate_and_set_action(player, card, direction, distance)
             if is_valid:
+                player.cards.remove(card) 
                 break
 
     def render_board(self):
@@ -147,7 +153,7 @@ class BGSGameEngine:
         return display
 
     def resolve_turn(self):
-        log = [f"**【第 {self.turn_count} 回合結算】**"]
+        log = [f"📜 **上一回合 (第 {self.turn_count} 回合) 戰報**："]
         
         if self.turn_count % 8 == 0 and self.turn_count > 0:
             log.append("☠️ **毒氣即將在下回合擴散，安全區縮小！**")
@@ -160,28 +166,26 @@ class BGSGameEngine:
                             fx, fy = tx + dx, ty + dy
                             if 0 <= fx < self.board_size and 0 <= fy < self.board_size:
                                 self.fire_zones[(fx, fy)] = 1
-                    log.append(f"🔥 **{p.user.display_name} 丟出了燃燒彈！座標 ({tx}, {ty}) 周圍燒了起來！**")
+                    log.append(f"🔥 **{p.user.display_name} 丟出了燃燒彈！座標 ({tx}, {ty}) 周圍燒ㄌ起來！**")
                 elif item_name == "冰凍術":
                     enemy = self.p2 if p == self.p1 else self.p1
                     if abs(enemy.target_x - tx) <= 1 and abs(enemy.target_y - ty) <= 1:
                         enemy.is_frozen = True
                         enemy.selected_card = "被冰封"
                         enemy.target_x, enemy.target_y = enemy.x, enemy.y
-                        log.append(f"🧊 **{p.user.display_name} 成功預判！冰凍術命中目標！{enemy.user.display_name} 本回合無法行動！**")
+                        log.append(f"🧊 **{p.user.display_name} 冰凍術命中目標！{enemy.user.display_name} 本回合無法行動！**")
                     else:
-                        log.append(f"🧊 **{p.user.display_name} 的冰凍術砸空了！**")
+                        log.append(f"🧊 **{p.user.display_name} 的冰凍術砸了空氣，恐怖如ㄙ！**")
             p.queued_items.clear()
         
         p1_t = (self.p1.target_x, self.p1.target_y)
         p2_t = (self.p2.target_x, self.p2.target_y)
 
-        # 1. 衝突判定
         if p1_t == p2_t:
             self.p1.x, self.p1.y = p1_t
             self.p2.x, self.p2.y = p2_t
             return self._resolve_clash(log)
 
-        # 2. 刀、盾、暗黑穿越移動
         for p in [self.p1, self.p2]:
             if p.selected_card in ["刀", "盾", "暗黑穿越"]:
                 p.x, p.y = p.target_x, p.target_y
@@ -193,27 +197,26 @@ class BGSGameEngine:
                     log.append(f"✴️ **{name_display} 使用暗黑穿越，瞬移到 ({p.x}, {p.y})！**")
                 elif p.selected_card == "刀":
                     log.append(f"🗡️ {name_display} 拔刀跳躍，移動至 ({p.x}, {p.y})")
+            elif p.selected_card == "待機":
+                name_display = "🐶 " + p.user.display_name if p == self.p1 else "🐱 " + p.user.display_name
+                log.append(f"⏸️ {name_display} 在原地待機，停留在 ({p.x}, {p.y})")
 
-        # 3. 槍移動與對衝
         self._resolve_gun_movement(log)
 
-        # 4. 檢查拾取
         for p in [self.p1, self.p2]:
             if (p.x, p.y) in self.items_on_board:
                 item = self.items_on_board.pop((p.x, p.y))
                 if item == "回血心":
-                    p.hp = min(10, p.hp + 3)
-                    log.append(f"♥️ **{p.user.display_name} 踩到了回血心，生命恢復 3 點！**")
+                    p.hp = min(15, p.hp + 3)
+                    log.append(f"♥️ **{p.user.display_name} 吃ㄌ回血心，生命恢復 3 點！**")
                 elif item == "傷害加倍球":
                     p.has_damage_buff = True
-                    log.append(f"🔴 **{p.user.display_name} 踩到了加倍球，下次傷害翻倍！**")
+                    log.append(f"🔴 **{p.user.display_name} 吃ㄌ加倍球，下次傷害翻倍！**")
                 else:
                     p.items.append(item)
-                    log.append(f"🎒 **{p.user.display_name} 撿到了 {item}！**")
+                    log.append(f"🎒 **{p.user.display_name} 撿ㄌ {item}！**")
 
-        # 5. 攻擊與反彈
         self._resolve_attacks(log)
-
         return self._end_turn(log)
 
     def _resolve_clash(self, log: list):
@@ -222,13 +225,13 @@ class BGSGameEngine:
         if (self.p1.x, self.p1.y) in self.items_on_board:
             item = self.items_on_board.pop((self.p1.x, self.p1.y))
             if item == "回血心":
-                self.p1.hp = min(10, self.p1.hp + 3)
-                self.p2.hp = min(10, self.p2.hp + 3)
-                log.append(f"♥️ **雙方在廝殺時踩到回血心，生命皆恢復 3 點！**")
+                self.p1.hp = min(15, self.p1.hp + 3)
+                self.p2.hp = min(15, self.p2.hp + 3)
+                log.append(f"♥️ **雙方在廝殺時吃ㄌ回血心，生命皆恢復 3 點！**")
             elif item == "傷害加倍球":
                 self.p1.has_damage_buff = True
                 self.p2.has_damage_buff = True
-                log.append(f"🔴 **雙方在廝殺時踩到加倍球，皆獲得傷害加倍！**")
+                log.append(f"🔴 **雙方在廝殺時吃ㄌ加倍球，皆獲得傷害加倍！**")
             else:
                 self.p1.items.append(item)
                 self.p2.items.append(item)
@@ -253,7 +256,6 @@ class BGSGameEngine:
         p1_gun = self.p1.selected_card == "槍"
         p2_gun = self.p2.selected_card == "槍"
 
-        # 檢查面對面對衝
         is_face_to_face = False
         if p1_gun and p2_gun:
             if self.p1.facing == "UP" and self.p2.facing == "DOWN" and self.p1.x == self.p2.x and self.p1.y > self.p2.y and self.p1.target_y <= self.p2.target_y:
@@ -267,8 +269,8 @@ class BGSGameEngine:
 
         if is_face_to_face:
             log.append("💥 **雙方持槍對衝！互相穿透並受到重創！**")
-            p1_dmg = 8 if self.p1.has_damage_buff else 4
-            p2_dmg = 8 if self.p2.has_damage_buff else 4
+            p1_dmg = 12 if self.p1.has_damage_buff else 6
+            p2_dmg = 12 if self.p2.has_damage_buff else 6
             
             self.p1.hp -= p2_dmg
             self.p2.hp -= p1_dmg
@@ -279,7 +281,6 @@ class BGSGameEngine:
             self.p2.x, self.p2.y = self.p2.target_x, self.p2.target_y
             return
 
-        # 若非對衝，則進行逐格模擬，確保只攻擊前方的敵人
         def get_gun_params(p):
             dx = 1 if p.target_x > p.x else (-1 if p.target_x < p.x else 0)
             dy = 1 if p.target_y > p.y else (-1 if p.target_y < p.y else 0)
@@ -352,14 +353,14 @@ class BGSGameEngine:
                     if p.x + 1 <= enemy.x <= p.x + 3 and abs(enemy.y - p.y) <= 1: in_range = True
                     elif enemy.x == p.x and abs(enemy.y - p.y) == 1: in_range = True
                 
-                if in_range: dmg = 2
+                if in_range: dmg = 4
                     
             elif p.selected_card == "槍" and getattr(p, 'gun_hit_enemy', False):
-                dmg = 4
+                dmg = 6
                     
             elif p.selected_card == "暗黑穿越":
                 if abs(enemy.x - p.target_x) <= 2 and abs(enemy.y - p.target_y) <= 2:
-                    dmg = 2
+                    dmg = 4
 
             if p.has_damage_buff and dmg > 0:
                 dmg *= 2
@@ -379,12 +380,10 @@ class BGSGameEngine:
                     action_text = "黑暗力量爆發" if p.selected_card == "暗黑穿越" else "命中了"
                     log.append(f"⚔️ {p_name} {action_text}！對 {e_name} 造成 {dmg} 點傷害！")
 
-        # 未受攻擊的盾牌範圍傷害 (含擊退與撞牆判定) - 統一收集後再結算
         shield_hits = []
         for p, enemy in [(self.p1, self.p2), (self.p2, self.p1)]:
             if p.selected_card == "盾" and not getattr(p, 'has_reflected', False):
                 if abs(enemy.x - p.x) <= 1 and abs(enemy.y - p.y) <= 1:
-                    # 不在同一格才觸發掃蕩
                     if not (enemy.x == p.x and enemy.y == p.y):
                         shield_hits.append((p, enemy))
 
@@ -393,17 +392,14 @@ class BGSGameEngine:
             enemy.hp -= sweep_dmg
             if p.has_damage_buff: p.has_damage_buff = False
             
-            # --- 擊退與撞牆邏輯 ---
             kb_dx = p.move_dx
             kb_dy = p.move_dy
             
-            # 標準化為單位向量以防萬一
             if kb_dx != 0: kb_dx //= abs(kb_dx)
             if kb_dy != 0: kb_dy //= abs(kb_dy)
             
             hit_wall = False
             actual_push = 0
-            # 固定推 3 格
             for step in range(3):
                 next_x = enemy.x + kb_dx
                 next_y = enemy.y + kb_dy
@@ -415,18 +411,14 @@ class BGSGameEngine:
                     actual_push += 1
                 else:
                     hit_wall = True
-                    break # 撞到牆就停下來
+                    break 
             
-            wall_msg = ""
-            if hit_wall:
-                enemy.hp -= 1
-                wall_msg = "，並狠狠撞上邊界額外受到 1 點傷害！"
-            else:
-                wall_msg = "！"
+            wall_msg = "，並狠狠撞上邊界額外受到 1 點傷害！" if hit_wall else "！"
+            if hit_wall: enemy.hp -= 1
                 
             p_name = "🐶 " + p.user.display_name if p == self.p1 else "🐱 " + p.user.display_name
             e_name = "🐶 " + enemy.user.display_name if enemy == self.p1 else "🐱 " + enemy.user.display_name
-            log.append(f"💨 {p_name} 的盾牌未受攻擊釋放衝擊波！對 {e_name} 造成 {sweep_dmg} 點傷害，並往移動方向擊退 {actual_push} 格{wall_msg}")
+            log.append(f"💨 {p_name} 的盾牌釋放衝擊波！對 {e_name} 造成 {sweep_dmg} 點傷害，擊退 {actual_push} 格{wall_msg}")
 
     def _end_turn(self, log: list):
         shrink_level = self.turn_count // 8
@@ -467,7 +459,7 @@ class BGSGameEngine:
                 new_item = random.choice(["暗黑穿越", "燃燒彈", "冰凍術", "傷害加倍球", "回血心"])
                 self.items_on_board[pos] = new_item
                 self.turns_since_last_item = 0
-                log.append(f"⭐ **地圖上出現了 {new_item}！**")
+                log.append(f"⭐ **地圖上出現ㄌ {new_item}！**")
 
         self.fire_zones.clear()
         
@@ -480,9 +472,16 @@ class BGSGameEngine:
             p.has_reflected = False
             p.is_frozen = False
             
-            if p.selected_card in p.cards:
-                p.cards.remove(p.selected_card)
-                p.cards.append(random.choice(["刀", "槍", "盾"]))
+            # 冷卻遞減
+            if p.draw_cooldown > 0:
+                p.draw_cooldown -= 1
+                
+            # 熬過罰站，自動補牌 (解鎖透支)
+            if p.draw_cooldown <= 0 and len(p.cards) == 0:
+                p.cards = ["刀", "槍", "盾"]
+                p.draw_cooldown = 3
+                p.has_overdrafted = False 
+                log.append(f"🔄 **{p.user.display_name} 撐過了冷卻期，重新獲得三張手牌！**")
                 
         self.turn_count += 1
         return {"status": "continue", "log": log}
@@ -490,9 +489,24 @@ class BGSGameEngine:
 
 # --- Discord UI 介面 ---
 
+def get_cards_display(player: Player, current_turn: int):
+    """計算並返回精準的 UI 手牌文字與未來補牌回合"""
+    if len(player.cards) == 0:
+        turns_to_wait = max(1, player.draw_cooldown)
+        if turns_to_wait == 1:
+            return "下回合將自動獲得 刀, 槍, 盾"
+        else:
+            return f"將於第 {current_turn + turns_to_wait} 回合獲得 3 張牌"
+    else:
+        cards_str = ', '.join(player.cards)
+        if player.draw_cooldown > 0:
+            return f"{cards_str} (第 {current_turn + player.draw_cooldown} 回合解鎖常規補牌)"
+        else:
+            return cards_str
+
 class GridBladeButton(discord.ui.Button):
     def __init__(self, direction, row):
-        super().__init__(label="\u200b", emoji="🗡️", style=discord.ButtonStyle.secondary, row=row)
+        super().__init__(emoji="🗡️", style=discord.ButtonStyle.secondary, row=row)
         self.direction = direction
 
     async def callback(self, interaction: discord.Interaction):
@@ -500,17 +514,23 @@ class GridBladeButton(discord.ui.Button):
         if view.main_view.game_over: return await interaction.response.send_message("遊戲結束ㄌ!", ephemeral=True)
         if interaction.user != view.player.user: return await interaction.response.send_message("這不是你的面板！", ephemeral=True)
         if view.player.action_submitted: return await interaction.response.send_message("你已經出招了，請等待對手！", ephemeral=True)
-        if "刀" not in view.player.cards: return await interaction.response.send_message("你手牌裡沒有【刀】！請換一個。", ephemeral=True)
+        if "刀" not in view.player.cards: return await interaction.response.send_message("你手牌裡沒有【刀】！請換一個，或點中央 ➕ 進行透支。", ephemeral=True)
 
         is_valid, msg = view.main_view.engine.validate_and_set_action(view.player, "刀", self.direction)
         if not is_valid: return await interaction.response.send_message(f"不能出界ㄛ!：{msg}", ephemeral=True)
 
-        await interaction.response.edit_message(content=f"✅ 第 {view.main_view.engine.turn_count} 回合行動已鎖定：【刀】！\n請等待結算...", view=view)
+        view.player.cards.remove("刀")
+        cards_left = get_cards_display(view.player, view.main_view.engine.turn_count)
+        
+        await interaction.response.edit_message(
+            content=f"✅ 第 {view.main_view.engine.turn_count} 回合鎖定：【刀】！\n你還擁有：{cards_left}\n請等待對手...", 
+            view=view 
+        )
         await view.main_view.check_both_submitted()
 
 class GridShieldButton(discord.ui.Button):
     def __init__(self, direction, row):
-        super().__init__(label="\u200b", emoji="🛡️", style=discord.ButtonStyle.success, row=row)
+        super().__init__(emoji="🛡️", style=discord.ButtonStyle.success, row=row)
         self.direction = direction
 
     async def callback(self, interaction: discord.Interaction):
@@ -518,17 +538,23 @@ class GridShieldButton(discord.ui.Button):
         if view.main_view.game_over: return await interaction.response.send_message("遊戲結束ㄌ!", ephemeral=True)
         if interaction.user != view.player.user: return await interaction.response.send_message("這不是你的面板!", ephemeral=True)
         if view.player.action_submitted: return await interaction.response.send_message("你已經出招了，請等待對手！", ephemeral=True)
-        if "盾" not in view.player.cards: return await interaction.response.send_message("你手牌裡沒有【盾】！請換一個。", ephemeral=True)
+        if "盾" not in view.player.cards: return await interaction.response.send_message("你手牌裡沒有【盾】！請換一個，或點中央 ➕ 進行透支。", ephemeral=True)
 
         is_valid, msg = view.main_view.engine.validate_and_set_action(view.player, "盾", self.direction)
         if not is_valid: return await interaction.response.send_message(f"不能出界ㄛ!：{msg}", ephemeral=True)
 
-        await interaction.response.edit_message(content=f"✅ 第 {view.main_view.engine.turn_count} 回合行動已鎖定：【盾】！\n請等待結算...", view=view)
+        view.player.cards.remove("盾")
+        cards_left = get_cards_display(view.player, view.main_view.engine.turn_count)
+        
+        await interaction.response.edit_message(
+            content=f"✅ 第 {view.main_view.engine.turn_count} 回合鎖定：【盾】！\n你還擁有：{cards_left}\n請等待對手...", 
+            view=view
+        )
         await view.main_view.check_both_submitted()
 
 class GridSpearButton(discord.ui.Button):
     def __init__(self, direction, row):
-        super().__init__(label="\u200b", emoji="📌", style=discord.ButtonStyle.primary, row=row)
+        super().__init__(emoji="📌", style=discord.ButtonStyle.primary, row=row)
         self.direction = direction
 
     async def callback(self, interaction: discord.Interaction):
@@ -536,7 +562,7 @@ class GridSpearButton(discord.ui.Button):
         if view.main_view.game_over: return await interaction.response.send_message("遊戲結束ㄌ!", ephemeral=True)
         if interaction.user != view.player.user: return await interaction.response.send_message("這不是你的面板！", ephemeral=True)
         if view.player.action_submitted: return await interaction.response.send_message("你已經出招了，請等待對手！", ephemeral=True)
-        if "槍" not in view.player.cards: return await interaction.response.send_message("你手牌裡沒有【槍】！請換一個。", ephemeral=True)
+        if "槍" not in view.player.cards: return await interaction.response.send_message("你手牌裡沒有【槍】！請換一個，或點中央 ➕ 進行透支。", ephemeral=True)
 
         await interaction.response.send_modal(GunDistanceModal(view.player, self.direction, view.main_view, view, view.main_view.engine.turn_count))
 
@@ -568,21 +594,60 @@ class GunDistanceModal(discord.ui.Modal):
         is_valid, msg = self.main_view.engine.validate_and_set_action(self.player, "槍", self.direction, dist)
         if not is_valid: return await interaction.response.send_message(f"不能出界ㄛ!：{msg}", ephemeral=True)
 
-        await interaction.response.edit_message(content=f"✅ 第 {self.turn_count} 回合行動已鎖定：【槍】(距離 {dist})！\n請等待結算...", view=self.control_view)
+        self.player.cards.remove("槍")
+        cards_left = get_cards_display(self.player, self.main_view.engine.turn_count)
+        
+        await interaction.response.edit_message(
+            content=f"✅ 第 {self.turn_count} 回合鎖定：【槍】(距離 {dist})！\n你還擁有：{cards_left}\n請等待對手...", 
+            view=self.control_view
+        )
         await self.main_view.check_both_submitted()
 
-class GridEmptyButton(discord.ui.Button):
+class GridPlusButton(discord.ui.Button):
     def __init__(self, row):
-        super().__init__(label="\u200b", style=discord.ButtonStyle.secondary, row=row, disabled=True)
+        super().__init__(emoji="➕", style=discord.ButtonStyle.primary, row=row)
 
-class GridCenterButton(discord.ui.Button):
-    def __init__(self, row, player: Player, engine: BGSGameEngine):
-        emoji = "🐶" if player == engine.p1 else "🐱"
-        super().__init__(label="\u200b", emoji=emoji, style=discord.ButtonStyle.secondary, row=row, disabled=True)
+    async def callback(self, interaction: discord.Interaction):
+        view: ControlPanel = self.view
+        p = view.player
+        if view.main_view.game_over: return await interaction.response.send_message("遊戲結束ㄌ!", ephemeral=True)
+        if interaction.user != p.user: return await interaction.response.send_message("這不是你的面板！", ephemeral=True)
+
+        if len(p.cards) == 3:
+            return await interaction.response.send_message("你的手牌已經是滿的！無法透支。", ephemeral=True)
+
+        if p.draw_cooldown <= 0:
+            # 常規補牌
+            p.cards = ["刀", "槍", "盾"]
+            p.draw_cooldown = 3
+            p.has_overdrafted = False
+            cards_left = get_cards_display(p, view.main_view.engine.turn_count)
+            await interaction.response.edit_message(
+                content=f"✅ **常規補牌！**\n你還擁有：{cards_left}\n請選擇出招！", 
+                view=view
+            )
+        else:
+            # 提前透支 (有鎖)
+            if len(p.cards) == 0:
+                return await interaction.response.send_message("❌ 你處於無牌罰站期，無法進行任何卡牌操作！", ephemeral=True)
+            
+            if p.has_overdrafted:
+                return await interaction.response.send_message("❌ 你在這個冷卻週期內已經透支過了！必須等冷卻歸零才能補牌！", ephemeral=True)
+            
+            used_cards = [c for c in ["刀", "槍", "盾"] if c not in p.cards]
+            p.cards = used_cards
+            p.draw_cooldown = 3
+            p.has_overdrafted = True
+            
+            cards_left = get_cards_display(p, view.main_view.engine.turn_count)
+            await interaction.response.edit_message(
+                content=f"⚠️ **已透支！** 尚未使用的牌已消散！\n你還擁有：{cards_left}\n請選擇出招！", 
+                view=view
+            )
 
 class GridSurrenderButton(discord.ui.Button):
     def __init__(self, row):
-        super().__init__(label="\u200b", emoji="🏳️", style=discord.ButtonStyle.danger, row=row)
+        super().__init__(emoji="🏳️", style=discord.ButtonStyle.danger, row=row)
 
     async def callback(self, interaction: discord.Interaction):
         view: ControlPanel = self.view
@@ -597,9 +662,8 @@ class GridSurrenderButton(discord.ui.Button):
 
         view.main_view.last_log = [f"🏳️ **{loser.mention} 投降！**\n **{winner.user.mention} 獲得勝利！**"]
         
-        await interaction.response.edit_message(content="你輸ㄌ。", view=view)
+        await interaction.response.edit_message(content="你輸ㄌ。", view=None) 
         await view.main_view.safe_edit_main_message()
-
 
 class ItemFixedButton(discord.ui.Button):
     def __init__(self, item_name, row, emoji, player):
@@ -615,12 +679,10 @@ class ItemFixedButton(discord.ui.Button):
             return await interaction.response.send_message("遊戲結束了ㄌ！", ephemeral=True)
         if interaction.user != p.user: 
             return await interaction.response.send_message("這不是你的面板！", ephemeral=True)
-        
         if self.item_name not in p.items:
             return await interaction.response.send_message(f"你沒有 {self.item_name}！", ephemeral=True)
         
         await interaction.response.send_modal(TargetingModal(p, self.item_name, view))
-
 
 class TargetingModal(discord.ui.Modal):
     coord_input = discord.ui.TextInput(
@@ -649,18 +711,21 @@ class TargetingModal(discord.ui.Modal):
         if self.item_name in ["燃燒彈", "冰凍術"]:
             self.player.queued_items.append((self.item_name, target_x, target_y))
             self.player.items.remove(self.item_name)
-            await interaction.response.edit_message(content=f"✅ 已準備 {self.item_name}！請繼續選擇你的出牌（刀/槍/盾/暗黑穿越）。", view=ControlPanel(self.control_view.main_view, self.player))
+            cards_left = get_cards_display(self.player, self.control_view.main_view.engine.turn_count)
+            await interaction.response.edit_message(
+                content=f"✅ 已準備 {self.item_name}！\n你還擁有：{cards_left}\n請繼續選擇出牌或行動。", 
+                view=self.control_view
+            )
 
         elif self.item_name == "暗黑穿越":
             if self.player.action_submitted:
                 return await interaction.response.send_message("你這回合已經出過招了，無法再使用暗黑穿越！", ephemeral=True)
-            
+                
             self.player.selected_card = "暗黑穿越"
             self.player.target_x = target_x
             self.player.target_y = target_y
             self.player.action_submitted = True
             
-            # 暗黑穿越的瞬移距離一樣記錄，並同步更新面向
             self.player.move_dx = target_x - self.player.x
             self.player.move_dy = target_y - self.player.y
             dx, dy = self.player.move_dx, self.player.move_dy
@@ -672,13 +737,14 @@ class TargetingModal(discord.ui.Modal):
                 self.player.facing = "LEFT" if dx < 0 else "RIGHT"
             
             self.player.items.remove(self.item_name)
+            cards_left = get_cards_display(self.player, self.control_view.main_view.engine.turn_count)
             
-            await self.control_view.main_view.safe_edit_main_message()
-            await interaction.response.edit_message(content=f"✅ 行動已鎖定：【暗黑穿越】！\n請等待結算...", view=ControlPanel(self.control_view.main_view, self.player))
+            await interaction.response.edit_message(
+                content=f"✅ 第 {self.control_view.main_view.engine.turn_count} 回合鎖定：【暗黑穿越】！\n你還擁有：{cards_left}\n請等待對手...", 
+                view=self.control_view
+            )
             await self.control_view.main_view.check_both_submitted()
 
-
-# --- 隱藏操控面板 (25格排滿完美利用) ---
 class ControlPanel(discord.ui.View):
     def __init__(self, main_view, player):
         super().__init__(timeout=None)
@@ -702,7 +768,7 @@ class ControlPanel(discord.ui.View):
         # --- Row 2 ---
         self.add_item(GridSpearButton(3, 2)) 
         self.add_item(GridShieldButton(6, 2))
-        self.add_item(GridCenterButton(2, self.player, self.main_view.engine))
+        self.add_item(GridPlusButton(2)) 
         self.add_item(GridShieldButton(2, 2))
         self.add_item(GridSpearButton(2, 2)) 
 
@@ -720,8 +786,6 @@ class ControlPanel(discord.ui.View):
         self.add_item(GridBladeButton(4, 4))
         self.add_item(GridSurrenderButton(4))
 
-
-# --- 主公開面板 ---
 class BGSMainView(discord.ui.View):
     def __init__(self, engine: BGSGameEngine):
         super().__init__(timeout=None)
@@ -738,27 +802,21 @@ class BGSMainView(discord.ui.View):
 
         status_text = (
             f"\n{board_display}\n"
-            f"🐶 {p1_mention} HP: {self.engine.p1.hp} | 座標: ({self.engine.p1.x}, {self.engine.p1.y}) | 手牌: {', '.join(self.engine.p1.cards)}\n"
-            f"🐱 {p2_mention} HP: {self.engine.p2.hp} | 座標: ({self.engine.p2.x}, {self.engine.p2.y}) | 手牌: {', '.join(self.engine.p2.cards)}"
+            f"🐶 {p1_mention} HP: {self.engine.p1.hp} | 座標: ({self.engine.p1.x}, {self.engine.p1.y})\n"
+            f"🐱 {p2_mention} HP: {self.engine.p2.hp} | 座標: ({self.engine.p2.x}, {self.engine.p2.y})"
         )
 
-        full_text = "\n".join(self.last_log) + "\n" + status_text
-
+        turn_header = f"🚩 **【第 {self.engine.turn_count} 回合開始】**\n"
+        full_text = turn_header + "\n".join(self.last_log) + "\n" + status_text
+        
         if not self.game_over:
-            unsubmitted = []
-            if not self.engine.p1.action_submitted: unsubmitted.append("🐶")
-            if not self.engine.p2.action_submitted: unsubmitted.append("🐱")
-            
-            if unsubmitted:
-                full_text += f"\n\n⏳ **等待出招中：{' '.join(unsubmitted)}**"
-            full_text += "\n\n(點擊按鈕召喚遊戲面板，並在面板上出招！)"
+            full_text += "\n\n(若面板被洗掉，可點擊下方按鈕重新召喚)"
 
         return full_text
 
     async def safe_edit_main_message(self):
         if not self.message:
             return
-
         content = self.get_message_content()
         try:
             await self.message.edit(content=content, view=self)
@@ -771,38 +829,34 @@ class BGSMainView(discord.ui.View):
                     self.message = new_msg  
                 except Exception as fetch_e:
                     print(f"[BGS] 續命失敗: {fetch_e}")
-            else:
-                print(f"[BGS] 未知的編輯錯誤: {e}")
         except Exception as e:
             print(f"[BGS] 發生錯誤: {e}")
 
     @discord.ui.button(label="🐶 喚出狗玩家面板", style=discord.ButtonStyle.secondary)
     async def spawn_dog_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.game_over:
-            return await interaction.response.send_message("遊戲結束ㄌ", ephemeral=True)
-            
-        if interaction.user != self.engine.p1.user:
-            return await interaction.response.send_message("不要搶別人ㄉ啦！", ephemeral=True)
+        if self.game_over: return await interaction.response.send_message("遊戲結束ㄌ", ephemeral=True)
+        if interaction.user != self.engine.p1.user: return await interaction.response.send_message("不要搶別人ㄉ啦！", ephemeral=True)
+        
         panel = ControlPanel(self, self.engine.p1)
-        await interaction.response.send_message(
-            "🎮 **這是你ㄉ遊戲面板**\n請直接在這裡點擊出招！", 
-            view=panel, 
-            ephemeral=True
-        )
+        cards_text = get_cards_display(panel.player, self.engine.turn_count)
+        
+        if self.engine.p1.action_submitted:
+            await interaction.response.send_message(f"✅ 第 {self.engine.turn_count} 回合已鎖定！\n你還擁有：{cards_text}\n請等待對手...", view=panel, ephemeral=True)
+        else:
+            await interaction.response.send_message(f"🎮 **這是你ㄉ遊戲面板**\n你還擁有: {cards_text}\n請點擊出招！", view=panel, ephemeral=True)
 
     @discord.ui.button(label="🐱 喚出貓玩家面板", style=discord.ButtonStyle.secondary)
     async def spawn_cat_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.game_over:
-            return await interaction.response.send_message("遊戲結束ㄌ", ephemeral=True)
-            
-        if interaction.user != self.engine.p2.user:
-            return await interaction.response.send_message("不要搶別人ㄉ啦！", ephemeral=True)
+        if self.game_over: return await interaction.response.send_message("遊戲結束ㄌ", ephemeral=True)
+        if interaction.user != self.engine.p2.user: return await interaction.response.send_message("不要搶別人ㄉ啦！", ephemeral=True)
+        
         panel = ControlPanel(self, self.engine.p2)
-        await interaction.response.send_message(
-            "🎮 **這是你ㄉ遊戲面板**\n請直接在這裡點擊出招！", 
-            view=panel, 
-            ephemeral=True
-        )
+        cards_text = get_cards_display(panel.player, self.engine.turn_count)
+        
+        if self.engine.p2.action_submitted:
+            await interaction.response.send_message(f"✅ 第 {self.engine.turn_count} 回合已鎖定！\n你還擁有：{cards_text}\n請等待對手...", view=panel, ephemeral=True)
+        else:
+            await interaction.response.send_message(f"🎮 **這是你ㄉ遊戲面板**\n你還擁有: {cards_text}\n請點擊出招！", view=panel, ephemeral=True)
 
     async def start_timer(self):
         turn_now = self.engine.turn_count
@@ -815,37 +869,64 @@ class BGSMainView(discord.ui.View):
             timeout_msgs = []
             if not self.engine.p1.action_submitted:
                 self.engine.force_random_action(self.engine.p1)
-                timeout_msgs.append(f"⏳ **{self.engine.p1.user.display_name} 想太久ㄌ！隨便亂走**")
+                timeout_msgs.append(f"⏳ **{self.engine.p1.user.display_name} 想太久ㄌ！強制行動或待機**")
             if not self.engine.p2.action_submitted:
                 self.engine.force_random_action(self.engine.p2)
-                timeout_msgs.append(f"⏳ **{self.engine.p2.user.display_name} 想太久ㄌ！隨便亂走**")
+                timeout_msgs.append(f"⏳ **{self.engine.p2.user.display_name} 想太久ㄌ！強制行動或待機**")
             
             await self.check_both_submitted(timeout_msgs)
 
     async def check_both_submitted(self, timeout_msgs=None):
-        if self.engine.p1.action_submitted and self.engine.p2.action_submitted:
-            res = self.engine.resolve_turn()
-            self.last_log = res["log"]
-            if timeout_msgs:
-                self.last_log = timeout_msgs + self.last_log
-            if res["status"] == "over":
-                self.game_over = True
+        while True:
+            # 即時判定：是否有手牌，如果沒手牌自動視為準備好待機
+            p1_ready = self.engine.p1.action_submitted or (len(self.engine.p1.cards) == 0 and self.engine.p1.draw_cooldown > 0)
+            p2_ready = self.engine.p2.action_submitted or (len(self.engine.p2.cards) == 0 and self.engine.p2.draw_cooldown > 0)
             
-            await self.safe_edit_main_message()
-            
-            if self.timer_task:
-                self.timer_task.cancel()
-            if not self.game_over:
-                self.timer_task = asyncio.create_task(self.start_timer())
-        else:
-            actor = self.engine.p1 if self.engine.p1.action_submitted else self.engine.p2
-            if timeout_msgs:
-                 self.last_log = timeout_msgs + [f"✅ **{actor.user.display_name}** 已鎖定行動，等待對手..."]
+            if p1_ready and p2_ready:
+                # 把因為沒牌而「被迫準備好」的人正式鎖定為待機
+                for p in [self.engine.p1, self.engine.p2]:
+                    if not p.action_submitted:
+                        p.selected_card = "待機"
+                        p.target_x, p.target_y = p.x, p.y
+                        p.action_submitted = True
+                        
+                res = self.engine.resolve_turn()
+                self.last_log = res["log"]
+                if timeout_msgs:
+                    self.last_log = timeout_msgs + self.last_log
+                if res["status"] == "over":
+                    self.game_over = True
+                    
+                await self.safe_edit_main_message()
+                
+                if self.timer_task:
+                    self.timer_task.cancel()
+                    
+                if self.game_over:
+                    break
+                    
+                # 確認下一回合是否又會立刻觸發全自動結算（例如雙方都沒牌在互等罰站）
+                p1_next_ready = self.engine.p1.action_submitted or (len(self.engine.p1.cards) == 0 and self.engine.p1.draw_cooldown > 0)
+                p2_next_ready = self.engine.p2.action_submitted or (len(self.engine.p2.cards) == 0 and self.engine.p2.draw_cooldown > 0)
+                
+                if p1_next_ready and p2_next_ready:
+                    await asyncio.sleep(2.5) # 稍微停頓讓玩家可以看清楚戰報，再繼續跳下一回合
+                else:
+                    self.timer_task = asyncio.create_task(self.start_timer())
+                    break
             else:
-                 self.last_log = [f"✅ **{actor.user.display_name}** 已鎖定行動，等待對手..."]
-                 
-            await self.safe_edit_main_message()
-
+                # 有人還沒出牌，單純更新進度文字
+                wait_names = []
+                if self.engine.p1.action_submitted: wait_names.append(self.engine.p1.user.display_name)
+                if self.engine.p2.action_submitted: wait_names.append(self.engine.p2.user.display_name)
+                
+                if timeout_msgs:
+                    self.last_log = timeout_msgs + [f"✅ 已收到部分行動，等待對手..."]
+                elif wait_names:
+                    self.last_log = [f"✅ **{' 和 '.join(wait_names)}** 已鎖定行動，等待對手..."]
+                
+                await self.safe_edit_main_message()
+                break
 
 class BladeGunShieldCog(commands.Cog):
     def __init__(self, bot):
@@ -858,7 +939,6 @@ class BladeGunShieldCog(commands.Cog):
             return
         
         await interaction.response.defer()
-        
         p1 = Player(interaction.user, 2, 2)
         p2 = Player(opponent, 7, 7)
         engine = BGSGameEngine(p1, p2)
@@ -866,7 +946,6 @@ class BladeGunShieldCog(commands.Cog):
         
         await interaction.followup.send(view.get_message_content(), view=view)
         view.message = await interaction.original_response()
-        
         view.timer_task = asyncio.create_task(view.start_timer())
 
 async def setup(bot):
