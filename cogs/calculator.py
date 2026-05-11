@@ -4,6 +4,7 @@ from discord import app_commands
 import sympy
 import re
 import math
+import logging
 from sympy.parsing.sympy_parser import (
     parse_expr, 
     standard_transformations, 
@@ -14,46 +15,26 @@ from sympy.parsing.sympy_parser import (
 from typing import Optional
 
 # ==========================================
-# 語法教學表 (純文字常數)
+# 語法教學表 (純數值計算限定)
 # ==========================================
-HELP_TEXT = """**【 運算模式指南 】**
-`.=` (前綴)：僅限「純數值」計算。算加減乘除、數字極限、求具體數值 (禁止輸入未知數)。
-`/calc` (純數值計算)：同上，但使用指令觸發。
-`/calc` (代數運算)：支援英文字母 (x, y, n)。化簡、展開、因式分解、微積分。
-`/calc` (解方程式)：找未知數專用。必須有等號 (=)，可用逗號解聯立。
+HELP_TEXT = """**【 純數值計算機指南 】**
+`.=` (前綴) 或 `/calc`：純數字計算機。
 
-**【 基礎運算與常數 】**
-加減乘除與取餘：`+`, `-`, `*`, `/`, `%`
-次方：`^` 或 `**`
-階乘：`!`
-圓周率：`pi` 或 `π`
-自然對數底數：`e`
-無限大：`oo` 或 `∞` (兩個小寫的 o)
-虛數：`I` 或 `i`
+**【 基礎運算與內建常數 】**
+* **基礎運算**：加減乘除與取餘 `+`, `-`, `*`, `/`, `%`
+* **次方 / 階乘**：`^` 或 `**`  |  `!`
+* **圓周率**：`pi` 或 `π`
+* **自然對數底數**：`e`
+* **黃金比例**：`phi` 或 `φ`
+* **無限大**：`oo` 或 `∞` (兩個小寫的 o)
+* **虛數**：`I` 或 `i`
 
 **【 函數大全 】**
-對數 (預設底數10)：`log(真數)`
-對數 (自訂底數)：`log(真數, 底數)`
-自然對數 (底數 e)：`ln(真數)`
-平方根 / 立方根：`sqrt(x)` / `cbrt(x)`
-三角函數：`sin()`, `cos()`, `tan()`, `sec()`, `csc()`, `cot()`
-反三角函數：`asin()`, `acos()`, `atan()`
-雙曲函數：`sinh()`, `cosh()`, `tanh()`
-
-**【 代數與微積分 】** (需使用 /calc 選擇代數運算)
-代數化簡：直接輸入算式 (例: `(x+y)^2 - 2xy`)
-多項式展開：`expand(算式)`
-因式分解：`factor(算式)`
-微分：`diff(算式, 變數)`
-不定積分：`int(算式, 變數)`
-定積分 / 瑕積分：`int(算式, (變數, 下限, 上限))`
-極限：`limit(算式, 變數, 趨近值)`
-級數總和 (Σ)：`sum(算式, (變數, 起點, 終點))`
-
-**【 解方程式 】** (需使用 /calc 選擇解方程式，算式必須包含等號)
-解一元方程式：`x^2 - 5x + 6 = 0`
-解聯立方程式：`x + y = 10, x - y = 2`
-解未知數等式：`2x + 5 = 15`"""
+* **對數**：預設底數10 `log(真數)` | 自訂底數 `log(真數, 底數)` | 自然對數 `ln(真數)`
+* **根號 / 絕對值**：平方根 `sqrt(x)` | 立方根 `cbrt(x)` | 絕對值 `abs(x)`
+* **三角函數**：`sin()`, `cos()`, `tan()`, `sec()`, `csc()`, `cot()`
+* **反三角函數**：`asin()`, `acos()`, `atan()`
+* **雙曲函數**：`sinh()`, `cosh()`, `tanh()`"""
 
 # 自訂一個「以 10 為底」的 log 函數
 class log10(sympy.Function):
@@ -70,7 +51,7 @@ class Calculator(commands.Cog):
                                 (convert_xor,) +
                                 (factorial_notation,))
 
-    # 完美數字格式化 (消除多餘的 .0，支援處理 NaN, 無限大, 與複數)
+    # 完美數字格式化
     def format_number(self, val):
         if val == sympy.oo or val == sympy.zoo: return "∞"
         if val == -sympy.oo: return "-∞"
@@ -86,57 +67,49 @@ class Calculator(commands.Cog):
             # 處理虛數/複數
             return str(val.evalf(10)).replace('.0*I', '*I').replace('1.0*I', 'I')
         except Exception:
-            # 代數或特例直接轉字串
+            # 特例直接轉字串
             return str(val)
 
-    # 核心計算模組
-    def evaluate(self, expr_str, mode="calc"):
+    # 核心計算模組 (純數字限定)
+    def evaluate(self, expr_str):
         # 1. 基礎清理與長度限制
         if len(expr_str) > 500:
-            return False, "算式長度過長，請縮短一點。"
+            return False, "太長ㄌ"
 
         expr_str = expr_str.replace('×', '*').replace('÷', '/').replace('％', '%')
         temp_expr = expr_str.replace('^', '**').replace(' ', '')
 
-        # 2. 🛡️ 精準防禦：位數預估法 (防止 9**9**9 或 2**1000000 導致記憶體崩潰)
-        # 找出所有 a**b 的結構
+        # 2. 🛡️ 精準防禦：位數預估法 (防止 9**9**9 導致記憶體崩潰)
         power_patterns = re.findall(r'(\d+)\*\*(\d+(?:\*\*\d+)?)', temp_expr)
         for base, exp_part in power_patterns:
             try:
-                # 處理嵌套次方，如 9**9**9
                 if '**' in exp_part:
                     sub_base, sub_exp = exp_part.split('**')
                     actual_exp = int(sub_base) ** int(sub_exp)
                 else:
                     actual_exp = int(exp_part)
                 
-                # 計算結果大約會有幾位數：log10(base^exp) = exp * log10(base)
                 if int(base) > 0:
                     digits = actual_exp * math.log10(int(base))
-                    # 如果位數超過 1,000,000 位，這絕對會讓 Python 記憶體溢位
                     if digits > 1000000:
-                        return True, "`∞` (數值過大，已超越硬體極限)"
+                        return True, "`∞`"
             except OverflowError:
-                # 如果連指數自己都溢位了，那結果絕對是無限大
                 return True, "`∞`"
             except Exception:
-                pass # 複雜代數或包含未知數的式子，直接放行交給 SymPy 處理
+                pass 
 
-        # 3. 準備 SymPy 運算環境
-        # 註冊未知數 (加入 n，用於數列或極限)
-        x, y, z, n = sympy.symbols('x y z n')
-        
-        # 👑 終極技能庫：把所有神級函數全部綁定
+        # 3. 準備純數字運算環境
         local_dict = {
-            # 變數與常數
-            'x': x, 'y': y, 'z': z, 'n': n,
+            # 內建常數
             'e': sympy.E, 'pi': sympy.pi, 'π': sympy.pi,
+            'phi': sympy.GoldenRatio, 'φ': sympy.GoldenRatio,
             'oo': sympy.oo, '∞': sympy.oo, 'max': sympy.oo, 'min': -sympy.oo,
-            'I': sympy.I, 'i': sympy.I, # 支援無限大與虛數 i
+            'I': sympy.I, 'i': sympy.I,
 
-            # 對數與開根號
+            # 對數、開根號、絕對值
             'log': log10, 'ln': sympy.ln,
-            'sqrt': sympy.sqrt, 'cbrt': sympy.cbrt, # 平方根與立方根
+            'sqrt': sympy.sqrt, 'cbrt': sympy.cbrt, 
+            'abs': sympy.Abs,
             
             # 三角函數全家餐
             'sin': sympy.sin, 'cos': sympy.cos, 'tan': sympy.tan,
@@ -147,63 +120,25 @@ class Calculator(commands.Cog):
             
             # 雙曲函數
             'sinh': sympy.sinh, 'cosh': sympy.cosh, 'tanh': sympy.tanh,
-            
-            # 微積分與高階代數
-            'diff': sympy.diff,               # 微分
-            'int': sympy.integrate,           # 積分
-            'limit': sympy.limit,             # 極限
-            'sum': sympy.summation,           # 數列級數和 (Σ)
-            'factor': sympy.factor,           # 因式分解
-            'expand': sympy.expand,           # 多項式展開
-            'simplify': sympy.simplify        # 強制化簡
         }
 
         try:
-            # ==================================
-            # 模式 3：解方程式 (找未知數)
-            # ==================================
-            if mode == "solve":
-                if '=' not in expr_str:
-                    return False, "解方程式需要等號 (=)，例如：2x^2 - 8 = 0"
-                
-                equations = []
-                parts = expr_str.split(',')
-                for part in parts:
-                    if '=' in part:
-                        left_str, right_str = part.split('=', 1)
-                        left_expr = parse_expr(left_str, local_dict=local_dict, transformations=self.transformations)
-                        right_expr = parse_expr(right_str, local_dict=local_dict, transformations=self.transformations)
-                        equations.append(sympy.Eq(left_expr, right_expr))
-                
-                solution = sympy.solve(equations)
-                return True, f"`{solution}`"
-
+            # 攔截等號 (純運算不需要等號)
             if '=' in expr_str:
-                return False, "純運算模式不支援等號！若要解未知數，請用 `/calc` 選擇「解方程式找未知數」。"
+                return False, "算式怎麼有等於鴨"
             
             expr = parse_expr(expr_str, local_dict=local_dict, transformations=self.transformations)
             
-            # ==================================
-            # 模式 1：純計算 (.= 限定)
-            # ==================================
-            if mode == "calc":
-                if expr.free_symbols:
-                    return False, "純計算模式不支援保留英文字母。若要算微積分或代數化簡，請使用 `/calc` 選擇「代數運算」。"
-                val = expr.evalf()
-                return True, f"`{self.format_number(val)}`"
+            # 嚴格攔截未知數：如果算式包含未定義的字母，直接擋下
+            if expr.free_symbols:
+                return False, "看不懂鴨，有亂打常數嗎?"
             
-            # ==================================
-            # 模式 2：代數運算與微積分
-            # ==================================
-            elif mode == "algebra":
-                # 直接針對使用者輸入的特殊函數（如因式分解、極限）執行化簡
-                simplified = sympy.simplify(expr)
-                if not simplified.free_symbols:
-                    return True, f"`{self.format_number(simplified.evalf())}`"
-                return True, f"`{simplified}`"
+            # 執行計算
+            val = expr.evalf()
+            return True, f"`{self.format_number(val)}`"
                 
         except Exception as e:
-            return False, f"看不懂，請檢查括號與函數用法 ({str(e)})"
+            return False, f"看不懂鴨，沒打錯嗎? ({str(e)})"
 
     # ==========================================
     # Discord 介面綁定
@@ -217,37 +152,38 @@ class Calculator(commands.Cog):
         expr = message.content[2:].strip()
         if not expr: return
         
-        success, result = self.evaluate(expr, mode="calc")
+        success, result = self.evaluate(expr)
         if success:
             await message.reply(f"`{expr}`\n{result}")
         else:
             await message.reply(f"{result}")
 
-    # 斜線指令 (/calc)
+    # 極簡化斜線指令 (/calc)
     @app_commands.command(name="calc", description="計算機")
-    @app_commands.describe(mode="選擇你要的計算類型", expression="輸入算式 (若查看介紹可不填)")
-    @app_commands.choices(mode=[
-        app_commands.Choice(name="查看語法介紹與教學", value="help"),
-        app_commands.Choice(name="純數值計算(限數值, 含極限與虛數)", value="calc"),
-        app_commands.Choice(name="代數運算(微積分, 展開, 因式分解)", value="algebra"),
-        app_commands.Choice(name="解方程式找未知數(支援多變數)", value="solve"),
-    ])
-    async def calc(self, interaction: discord.Interaction, mode: app_commands.Choice[str], expression: Optional[str] = None):
-        # 攔截教學模式，直接輸出設定好的說明文字
-        if mode.value == "help":
+    @app_commands.describe(expression="輸入算式 (留空則顯示語法教學)")
+    async def calc(self, interaction: discord.Interaction, expression: Optional[str] = None):
+        # 如果沒填算式，就當作他想看說明書
+        if not expression:
             await interaction.response.send_message(HELP_TEXT)
             return
-            
-        # 若不是看教學，卻沒填算式，給予提示
-        if not expression:
-            await interaction.response.send_message("請輸入你要計算的算式！", ephemeral=True)
-            return
 
-        success, result = self.evaluate(expression, mode=mode.value)
+        success, result = self.evaluate(expression)
         if success:
             await interaction.response.send_message(f"`{expression}`\n{result}")
         else:
             await interaction.response.send_message(f"{result}", ephemeral=True)
+
+    # 攔截並過濾掉因為 `.=` 產生的「找不到指令」報錯
+    @commands.Cog.listener()
+    async def on_command_error(self, ctx, error):
+        if isinstance(error, commands.CommandNotFound):
+            # 檢查找不到的指令是不是以 '=' 開頭 (例如 =, =e2/e3)
+            if ctx.invoked_with and ctx.invoked_with.startswith("="):
+                return # 靜默忽略，不報錯
+
+        # 其他常規錯誤照常透過 logger 輸出，避免把真的 bug 也吃掉了
+        logger = logging.getLogger('discord.ext.commands.bot')
+        logger.error('Ignoring exception in command %s', ctx.command, exc_info=error)
 
 async def setup(bot):
     await bot.add_cog(Calculator(bot))
