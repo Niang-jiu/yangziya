@@ -12,7 +12,7 @@ class Admin(commands.Cog):
     # ==========================
     # 1. 關機指令 (.goodnight)
     # ==========================
-    @commands.command(name="goodnight", description="晚安 (關機)")
+    @commands.command(name="goodnight", description="晚安")
     async def shutdown(self, ctx):
         # 檢查觸發指令的人是不是你本人
         if ctx.author.id != self.owner_id:
@@ -27,13 +27,13 @@ class Admin(commands.Cog):
     # ==========================
     # 2. 徹底重啟指令 (.morning)
     # ==========================
-    @commands.command(name="morning", description="早安 (重新啟動)")
+    @commands.command(name="morning", description="早安")
     async def restart(self, ctx):
         if ctx.author.id != self.owner_id:
             await ctx.send("不認識你！")
             return
 
-        await ctx.send("🌅 早安！正在重新啟動機器人...")
+        await ctx.send("🌅 早安鴨鴨鴨")
         print("機器人已透過指令手動重啟。")
         
         # 使用 os.execv 讓作業系統層級直接替換掉目前的進程
