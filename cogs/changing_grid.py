@@ -14,14 +14,25 @@ class GridButton(discord.ui.Button):
         self.view_game = view_game
 
     async def callback(self, interaction: discord.Interaction):
-        # 防呆：檢查是不是呼叫指令的人點的
         if interaction.user != self.view_game.player:
             return await interaction.response.send_message("不要亂點！", ephemeral=True)
 
-        # 結算時間
         elapsed_time = round(time.time() - self.view_game.start_time, 2)
 
-        # 判斷是否點擊正確
+        # 🔒 絕對時間鎖
+        if elapsed_time > 60:
+            for child in self.view_game.children:
+                child.disabled = True
+                if isinstance(child, GridButton) and child.x == self.view_game.target_x and child.y == self.view_game.target_y:
+                    child.style = discord.ButtonStyle.success
+                    child.label = "🎯"
+            
+            await interaction.response.edit_message(content=f"⏳ **超過60秒ㄌ! 愚蠢**\n**(你花了 {elapsed_time} 秒)**", view=self.view_game)
+            self.view_game.stop()
+            await self.trigger_post_game(interaction)
+            return
+
+        # 判斷正確與否
         if self.x == self.view_game.target_x and self.y == self.view_game.target_y:
             self.style = discord.ButtonStyle.success
             self.label = "✅"
@@ -30,42 +41,87 @@ class GridButton(discord.ui.Button):
             self.style = discord.ButtonStyle.danger
             self.label = "❌"
             result_text = f"**答錯ㄌ！愚蠢！**\n**想了 {elapsed_time} 秒還錯。**"
-            # 貼心地幫玩家標出正確答案在哪裡
             for child in self.view_game.children:
                 if isinstance(child, GridButton) and child.x == self.view_game.target_x and child.y == self.view_game.target_y:
                     child.style = discord.ButtonStyle.success
                     child.label = "🎯"
         
-        # 停用所有按鈕
         for child in self.view_game.children:
             child.disabled = True
             
         await interaction.response.edit_message(content=result_text, view=self.view_game)
         self.view_game.stop()
+        await self.trigger_post_game(interaction)
+
+    # 呼叫結算面板的輔助函數
+    async def trigger_post_game(self, interaction):
+        post_view = PostGameView(self.view_game.player, self.view_game.rule_display, self.view_game.message)
+        post_msg = await interaction.followup.send(view=post_view, wait=True)
+        post_view.message = post_msg
+
+
+# =========================================
+# 結算與控制面板 (負責回看與重開)
+# =========================================
+class PostGameView(discord.ui.View):
+    def __init__(self, player: discord.Member, rule_display: str, game_message: discord.Message):
+        super().__init__(timeout=300)
+        self.player = player
+        self.rule_display = rule_display
+        self.game_message = game_message
+        self.message = None
+
+    @discord.ui.button(label="📜 回看題目", style=discord.ButtonStyle.secondary)
+    async def show_rules(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(f"**【剛剛的題目】**\n{self.rule_display}", ephemeral=True)
+
+    @discord.ui.button(label="🔄 重來一局", style=discord.ButtonStyle.primary)
+    async def restart_game(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.player:
+            return await interaction.response.send_message("你不是這局的玩家！想玩自己輸入指令", ephemeral=True)
+
+        new_view = GameView(player=self.player)
+        new_view.message = self.game_message
+
+        msg_content = (
+            f"**推演小遊戲** ({self.player.mention})\n"
+            f"藍色方塊是起點，**箭頭代表你一開始的面向！**\n"
+            f"**步驟：**\n{new_view.rule_display}"
+        )
+
+        await self.game_message.edit(content=msg_content, view=new_view)
+        await interaction.response.defer()
+        await interaction.message.delete()
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        try:
+            if self.message:
+                await self.message.edit(view=self)
+        except:
+            pass
+
 
 class GameView(discord.ui.View):
     def __init__(self, player: discord.Member):
         super().__init__(timeout=60)
         self.player = player
-        self.start_time = time.time()  # 開始計時
+        self.message = None
+        self.start_time = time.time()  
         
-        # 隨機產生起點座標
         self.start_x = random.randint(0, 4)
         self.start_y = random.randint(0, 4)
-        
-        # 隨機產生初始面向 (0:上, 1:右, 2:下, 3:左)
         self.start_o = random.randint(0, 3) 
         self.o_emojis = {0: '🔼', 1: '▶️', 2: '🔽', 3: '◀️'}
 
-        # 移動邏輯輔助函數
         def move(x, y, o, steps):
-            if o == 0: y -= steps   # 朝上
-            elif o == 1: x += steps # 朝右
-            elif o == 2: y += steps # 朝下
-            elif o == 3: x -= steps # 朝左
+            if o == 0: y -= steps   
+            elif o == 1: x += steps 
+            elif o == 2: y += steps 
+            elif o == 3: x -= steps 
             return x % 5, y % 5, o
 
-        # 產生單一步驟的函數，回傳 (文字說明, 執行函數)
         def get_action():
             steps = random.randint(1, 100)
             action_type = random.randint(1, 6)
@@ -129,25 +185,36 @@ class GameView(discord.ui.View):
                         return move(x, y, o, st)
                     return text, func
                     
+            # 🔥 這裡完完全全照著你的完美邏輯寫的！
             else: 
-                text = f"中心點對稱翻轉後，前進 {steps} 格"
+                text = f"中心點對稱後，前進 {steps} 格"
                 def func(x, y, o, st=steps):
-                    x = (4 - x) % 5
-                    y = (4 - y) % 5
-                    o = (o + 2) % 4
-                    return move(x, y, o, st)
+                    new_x = (4 - x) % 5
+                    new_y = (4 - y) % 5
+                    
+                    if o == 0 or o == 2:      # 如果是朝上或朝下
+                        if new_y == y:        # 目標格的 y = 現在的 y
+                            new_o = o         # 方向不變
+                        else:                 # 其他狀況 (y變了)
+                            new_o = (o + 2) % 4
+                            
+                    else:                     # 如果是朝左或朝右 (o == 1 or o == 3)
+                        if new_x == x:        # 目標格的 x = 現在的 x
+                            new_o = o         # 方向不變
+                        else:                 # 其他狀況 (x變了)
+                            new_o = (o + 2) % 4
+                            
+                    return move(new_x, new_y, new_o, st)
                 return text, func
 
         self.step_texts = []
         self.step_funcs = []
         
-        # 生成前 5 個一般步驟
         for _ in range(5):
             text, func = get_action()
             self.step_texts.append(text)
             self.step_funcs.append(func)
 
-        # 第 6 步：複合指令魔王關
         macro_type = random.choice(["repeat", "sequence"])
         if macro_type == "repeat":
             target_step = random.randint(1, 5)
@@ -158,7 +225,7 @@ class GameView(discord.ui.View):
                     x, y, o = self.step_funcs[t_step-1](x, y, o)
                 return x, y, o
         else:
-            seq = random.sample(range(1, 6), 3) # 隨機抽 3 個前面不同的步驟
+            seq = random.sample(range(1, 6), 3) 
             macro_text = f"依序執行步驟 {seq[0]}, {seq[1]}, {seq[2]}"
             def macro_func(x, y, o, sequence=seq):
                 for s in sequence:
@@ -168,33 +235,35 @@ class GameView(discord.ui.View):
         self.step_texts.append(macro_text)
         self.step_funcs.append(macro_func)
 
-        # 模擬一次完整計算，找出目標答案
         curr_x, curr_y, curr_o = self.start_x, self.start_y, self.start_o
         for func in self.step_funcs:
             curr_x, curr_y, curr_o = func(curr_x, curr_y, curr_o)
             
         self.target_x, self.target_y = curr_x, curr_y
         
-        # 整理文字顯示
         rule_lines = [f"`{i+1}.` {text}" for i, text in enumerate(self.step_texts)]
         self.rule_display = "\n".join(rule_lines)
 
-        # 建立 5x5 面板
         for y in range(5):
             for x in range(5):
                 btn = GridButton(x, y, self)
-                # 標示起點與初始方向
                 if x == self.start_x and y == self.start_y:
                     btn.style = discord.ButtonStyle.primary
                     btn.label = self.o_emojis[self.start_o]
                 self.add_item(btn)
 
-    # 60 秒超時處理
     async def on_timeout(self):
         for child in self.children:
             child.disabled = True
+            if isinstance(child, GridButton) and child.x == self.target_x and child.y == self.target_y:
+                child.style = discord.ButtonStyle.success
+                child.label = "🎯"
         try:
-            await self.message.edit(content="⏳ **想太久ㄌ! 愚蠢", view=self)
+            if hasattr(self, 'message') and self.message:
+                await self.message.edit(content="⏳ **想太久ㄌ! 愚蠢**", view=self)
+                post_view = PostGameView(self.player, self.rule_display, self.message)
+                post_msg = await self.message.reply(view=post_view)
+                post_view.message = post_msg
         except:
             pass
 
@@ -217,6 +286,5 @@ class SpaceLogicGame(commands.Cog):
         await interaction.response.send_message(msg_content, view=view)
         view.message = await interaction.original_response()
 
-# 固定寫法
 async def setup(bot):
     await bot.add_cog(SpaceLogicGame(bot))
