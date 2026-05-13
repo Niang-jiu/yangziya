@@ -257,7 +257,7 @@ class GameView(discord.ui.View):
 
         def get_action():
             steps = random.randint(1, 100)
-            action_type = random.randint(1, 6)
+            action_type = random.randint(1, 7)
             
             if action_type == 1:
                 dir_type = random.choice(["前進", "後退"])
@@ -316,6 +316,36 @@ class GameView(discord.ui.View):
                         if o == 0: o = 2
                         elif o == 2: o = 0
                         return move(x, y, o, st)
+                    return text, func
+
+            elif action_type == 6:
+                # 換成全形的 ＼ 和 ／ 避免 Discord Markdown 衝突
+                diagonal_type = random.choice(["＼", "／"])
+                if diagonal_type == "＼":
+                    text = f"畫面沿「＼」對角線翻轉後，前進 {steps} 格"
+                    def func(x, y, o, st=steps):
+                        # 座標轉換: 左上到右下 (\) 對稱
+                        new_x = y
+                        new_y = x
+                        # 方向轉換: 上(0)<->左(3), 右(1)<->下(2)
+                        if o == 0: new_o = 3
+                        elif o == 1: new_o = 2
+                        elif o == 2: new_o = 1
+                        elif o == 3: new_o = 0
+                        return move(new_x, new_y, new_o, st)
+                    return text, func
+                else:
+                    text = f"畫面沿「／」對角線翻轉後，前進 {steps} 格"
+                    def func(x, y, o, st=steps):
+                        # 座標轉換: 左下到右上 (/) 對稱
+                        new_x = 4 - y
+                        new_y = 4 - x
+                        # 方向轉換: 上(0)<->右(1), 下(2)<->左(3)
+                        if o == 0: new_o = 1
+                        elif o == 1: new_o = 0
+                        elif o == 2: new_o = 3
+                        elif o == 3: new_o = 2
+                        return move(new_x, new_y, new_o, st)
                     return text, func
                     
             else: 

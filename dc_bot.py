@@ -38,9 +38,25 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
+# (上半部程式碼保持不變...)
+
 @bot.event
 async def on_ready():
     print(f'{bot.user} 已經上線。')
+    
+    # 👇 新增：檢查是否有重啟留下的暫存檔
+    if os.path.exists("restart_channel.txt"):
+        # 讀取裡面的頻道 ID
+        with open("restart_channel.txt", "r") as f:
+            channel_id = int(f.read().strip())
+        
+        # 讀取完畢後，把暫存檔刪除（避免下次正常開機也亂叫）
+        os.remove("restart_channel.txt")
+        
+        # 找到剛剛下指令的頻道，並發送重啟完畢的訊息
+        channel = bot.get_channel(channel_id)
+        if channel:
+            await channel.send("醒ㄌ")
 
 if __name__ == "__main__":
     # 既然繼承了 commands.Bot，直接 run 就可以了

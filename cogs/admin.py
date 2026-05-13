@@ -33,8 +33,13 @@ class Admin(commands.Cog):
             await ctx.send("不認識你！")
             return
 
-        await ctx.send("🌅 早安鴨鴨鴨")
-        print("機器人已透過指令手動重啟。")
+        # 修改：重啟前的提示訊息可以改一下，讓你知道它正在動作
+        await ctx.send("早安鴨鴨鴨")
+        print("機器人已透過指令重啟。")
+        
+        # 👇 新增：把當前的頻道 ID 存進暫存檔
+        with open("restart_channel.txt", "w") as f:
+            f.write(str(ctx.channel.id))
         
         # 使用 os.execv 讓作業系統層級直接替換掉目前的進程
         os.execv(sys.executable, ['python'] + sys.argv)
