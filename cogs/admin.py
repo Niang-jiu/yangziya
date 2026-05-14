@@ -2,11 +2,12 @@ import discord
 from discord.ext import commands
 import os
 import sys
+import subprocess
 
 class Admin(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # --- 請將下方的數字替換成你的 Discord 帳號 ID ---
+        # --- Discord 帳號 ID ---
         self.owner_id = 1141364674240204821 
 
     # ==========================
@@ -33,16 +34,21 @@ class Admin(commands.Cog):
             await ctx.send("不認識你！")
             return
 
-        # 修改：重啟前的提示訊息可以改一下，讓你知道它正在動作
         await ctx.send("早安鴨鴨鴨")
         print("機器人已透過指令重啟。")
         
-        # 👇 新增：把當前的頻道 ID 存進暫存檔
+        # 把當前的頻道 ID 存進暫存檔
         with open("restart_channel.txt", "w") as f:
             f.write(str(ctx.channel.id))
         
-        # 使用 os.execv 讓作業系統層級直接替換掉目前的進程
-        os.execv(sys.executable, ['python'] + sys.argv)
+        #斷開 Discord 連線
+        await self.bot.close()
+        
+        #開啟一個全新的機器人進程
+        subprocess.Popen([sys.executable] + sys.argv)
+        
+        #殺掉當前程式
+        os._exit(0)
 
     # ==========================
     # 3. 熱重載模組 (.reload)

@@ -257,6 +257,9 @@ class GameView(discord.ui.View):
 
         def get_action():
             steps = random.randint(1, 100)
+            while steps % 5 == 0:
+                steps = random.randint(1, 100)
+
             action_type = random.randint(1, 7)
             
             if action_type == 1:
