@@ -465,7 +465,7 @@ class SpaceLogicGame(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="gridgame", description="推演小遊戲")
+    @app_commands.command(name="遊戲-找格子", description="推演小遊戲")
     @app_commands.describe(mode="選擇模式 (預設單人)")
     async def play_game(self, interaction: discord.Interaction, mode: Literal["單人", "雙人", "多人"] = "單人"):
         

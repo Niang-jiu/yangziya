@@ -932,7 +932,7 @@ class BladeGunShieldCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="bgs", description="發起一場刀槍盾對決！")
+    @app_commands.command(name="遊戲-刀槍盾", description="策略對戰遊戲")
     async def start_bgs(self, interaction: discord.Interaction, opponent: discord.Member):
         if opponent.bot:
             await interaction.response.send_message("對不起鴨，我不會玩", ephemeral=True)
