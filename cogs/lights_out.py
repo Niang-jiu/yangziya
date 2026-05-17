@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import random
+import asyncio
 
 # --- 遊戲進行中的按鈕 ---
 class LightsOutButton(discord.ui.Button):
@@ -37,9 +38,7 @@ class PlayAgainButton(discord.ui.Button):
         # 重置遊戲並切換回遊玩介面
         view.start_game()
         instruction = (
-            "點燈遊戲\n"
-            "規則：點擊任何一格，它和上下左右的狀態都會切換。\n"
-            "目標：把所有的「開」變成「關」！\n"
+            "關燈"
         )
         await interaction.response.edit_message(content=instruction, embeds=[], view=view)
 
@@ -52,25 +51,41 @@ class EndButton(discord.ui.Button):
         if interaction.user != view.player:
             return await interaction.response.send_message("不要幫別人點", ephemeral=True)
         
-        # 凍結按鈕
-        for child in view.children:
-            child.disabled = True
-        await interaction.response.edit_message(view=view)
+        # 取消結算畫面的計時器
+        if view.end_task:
+            view.end_task.cancel()
+
+        # 直接拔掉整個 View (清除所有按鈕)，只留下原本的 Embed 訊息
+        await interaction.response.edit_message(view=None)
         view.stop()
 
 # --- 遊戲主控制面板 ---
 class LightsOutView(discord.ui.View):
     def __init__(self, player, bot):
-        super().__init__(timeout=180) 
+        super().__init__(timeout=None) # 取消內建的無動作超時，改用手動 Task 計算
         self.player = player
         self.bot = bot
         self.message = None
         self.grid = []
         self.buttons = []
+        
+        # 用來記錄遊戲狀態與計時任務
+        self.state = 'init'
+        self.game_task = None
+        self.end_task = None
+        
         self.start_game()
 
     def start_game(self):
-        """初始化或重置盤面"""
+        """初始化或重置盤面，並啟動 5 分鐘計時"""
+        self.state = 'playing'
+        
+        # 如果有舊的計時任務，先取消掉
+        if getattr(self, 'game_task', None):
+            self.game_task.cancel()
+        if getattr(self, 'end_task', None):
+            self.end_task.cancel()
+
         self.grid = [[False for _ in range(5)] for _ in range(5)]
         
         for _ in range(random.randint(10, 20)):
@@ -79,6 +94,32 @@ class LightsOutView(discord.ui.View):
             self._internal_toggle(rx, ry)
             
         self.build_playing_ui()
+        
+        # 啟動 5 分鐘 (300秒) 的強制結束計時器
+        self.game_task = asyncio.create_task(self.game_timer(300))
+
+    async def game_timer(self, duration):
+        """遊戲 5 分鐘計時任務"""
+        try:
+            await asyncio.sleep(duration)
+            if self.state == 'playing':
+                await self.end_game(None, win=False, reason="timeout")
+        except asyncio.CancelledError:
+            pass # 任務被取消(例如通關了)不處理
+
+    async def end_screen_timer(self, duration):
+        """結算畫面 1 分鐘計時任務"""
+        try:
+            await asyncio.sleep(duration)
+            if self.state == 'ended' and self.message:
+                # 直接把 view 設為 None，把下方按鈕徹底刪除
+                try:
+                    await self.message.edit(view=None)
+                except discord.HTTPException:
+                    pass
+                self.stop()
+        except asyncio.CancelledError:
+            pass
 
     def build_playing_ui(self):
         """建立 5x5 遊玩按鈕"""
@@ -125,24 +166,32 @@ class LightsOutView(discord.ui.View):
         result = ""
         for row in self.grid:
             for cell in row:
-                # 使用標準文字幾何圖形，不包含表情符號
                 result += "□ " if cell else "■ "
             result += "\n"
         return f"```\n{result}```"
 
-    async def end_game(self, interaction: discord.Interaction, win: bool):
+    async def end_game(self, interaction: discord.Interaction, win: bool, reason=""):
         """處理遊戲結束並切換至結算畫面"""
+        self.state = 'ended'
+        if self.game_task:
+            self.game_task.cancel()
         
         # --- 第一個 Embed：遊戲資訊與盤面 ---
         embed1 = discord.Embed(color=0x2b2d31)
         embed1.set_author(name=f"{self.player.display_name} ({self.player.name})", icon_url=self.player.display_avatar.url)
         
-        status_text = "你贏了！" if win else "想太久ㄌ"
+        if win:
+            status_text = "你贏了！"
+        elif reason == "timeout":
+            status_text = "想太久ㄌ"
+        else:
+            status_text = "失敗！"
+            
         board_str = self.get_board_string()
         
         embed1.description = (
             "**點燈遊戲**\n\n"
-            "過關獎勵：50\n\n"
+            "過關獎勵：10\n\n"
             f"**{status_text}**\n\n"
             f"{board_str}"
         )
@@ -150,7 +199,7 @@ class LightsOutView(discord.ui.View):
         embed1.timestamp = discord.utils.utcnow()
         
         # --- 經濟系統處理 ---
-        reward = 50 if win else 0
+        reward = 10 if win else 0
         bal = 0
         economy_cog = self.bot.get_cog("Economy")
         
@@ -172,13 +221,9 @@ class LightsOutView(discord.ui.View):
             await interaction.response.edit_message(content=None, embeds=[embed1, embed2], view=self)
         elif self.message:
             await self.message.edit(content=None, embeds=[embed1, embed2], view=self)
-
-    async def on_timeout(self):
-        if hasattr(self, 'message') and self.message:
-            try:
-                await self.end_game(None, win=False)
-            except Exception:
-                pass
+            
+        # 啟動 1 分鐘的結算畫面防呆計時器 (時間到就凍結按鈕)
+        self.end_task = asyncio.create_task(self.end_screen_timer(60))
 
 # --- Cog 註冊區 ---
 class LightsOutGame(commands.Cog):
@@ -190,9 +235,7 @@ class LightsOutGame(commands.Cog):
         
         view = LightsOutView(interaction.user, self.bot)
         instruction = (
-            "點燈遊戲\n"
-            "規則：點擊任何一格，它和上下左右的狀態都會切換。\n"
-            "目標：把所有的「開」變成「關」！\n"
+            "關燈"
         )
         
         await interaction.response.send_message(content=instruction, view=view)
