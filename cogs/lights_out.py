@@ -7,7 +7,8 @@ import asyncio
 # --- 遊戲進行中的按鈕 ---
 class LightsOutButton(discord.ui.Button):
     def __init__(self, x, y):
-        super().__init__(style=discord.ButtonStyle.secondary, label="關", row=y)
+        # 移除 label，之後由 update_board 賦予 emoji
+        super().__init__(style=discord.ButtonStyle.secondary, row=y)
         self.x = x
         self.y = y
 
@@ -37,9 +38,8 @@ class PlayAgainButton(discord.ui.Button):
         
         # 重置遊戲並切換回遊玩介面
         view.start_game()
-        instruction = (
-            "關燈"
-        )
+        goal_text = "全開" if view.target_state else "全關"
+        instruction = f"目標：把燈{goal_text}！"
         await interaction.response.edit_message(content=instruction, embeds=[], view=view)
 
 class EndButton(discord.ui.Button):
@@ -62,12 +62,13 @@ class EndButton(discord.ui.Button):
 # --- 遊戲主控制面板 ---
 class LightsOutView(discord.ui.View):
     def __init__(self, player, bot):
-        super().__init__(timeout=None) # 取消內建的無動作超時，改用手動 Task 計算
+        super().__init__(timeout=None)
         self.player = player
         self.bot = bot
         self.message = None
         self.grid = []
         self.buttons = []
+        self.target_state = False # 紀錄這局目標是要全關(False)還是全開(True)
         
         # 用來記錄遊戲狀態與計時任務
         self.state = 'init'
@@ -86,7 +87,11 @@ class LightsOutView(discord.ui.View):
         if getattr(self, 'end_task', None):
             self.end_task.cancel()
 
-        self.grid = [[False for _ in range(5)] for _ in range(5)]
+        # 隨機決定這局的目標是「全開(True)」還是「全關(False)」
+        self.target_state = random.choice([True, False])
+
+        # 為了確保必定有解，從「目標狀態」開始逆向打亂盤面
+        self.grid = [[self.target_state for _ in range(5)] for _ in range(5)]
         
         for _ in range(random.randint(10, 20)):
             rx = random.randint(0, 4)
@@ -105,7 +110,7 @@ class LightsOutView(discord.ui.View):
             if self.state == 'playing':
                 await self.end_game(None, win=False, reason="timeout")
         except asyncio.CancelledError:
-            pass # 任務被取消(例如通關了)不處理
+            pass 
 
     async def end_screen_timer(self, duration):
         """結算畫面 1 分鐘計時任務"""
@@ -148,17 +153,21 @@ class LightsOutView(discord.ui.View):
         for y in range(5):
             for x in range(5):
                 btn = self.buttons[y][x]
+                btn.style = discord.ButtonStyle.secondary
+                btn.label = None # 不顯示文字
+                
+                # 判斷要放哪個表情符號
                 if self.grid[y][x]:
-                    btn.style = discord.ButtonStyle.primary 
-                    btn.label = "開"
+                    btn.emoji = "🟨" 
                 else:
-                    btn.style = discord.ButtonStyle.secondary 
-                    btn.label = "關"
+                    btn.emoji = "⬛" 
 
     def check_win(self):
+        # 檢查是否所有的格子都符合這局的隨機目標
         for row in self.grid:
-            if any(row): 
-                return False
+            for cell in row:
+                if cell != self.target_state:
+                    return False
         return True
 
     def get_board_string(self):
@@ -166,14 +175,16 @@ class LightsOutView(discord.ui.View):
         result = ""
         for row in self.grid:
             for cell in row:
-                result += "□ " if cell else "■ "
+                result += "🟨" if cell else "⬛"
             result += "\n"
-        return f"```\n{result}```"
+        return result
 
     async def end_game(self, interaction: discord.Interaction, win: bool, reason=""):
         """處理遊戲結束並切換至結算畫面"""
         self.state = 'ended'
-        if self.game_task:
+        
+        # 🐛 修復：如果是超時，代表任務正在執行中，千萬不能自己取消自己！
+        if reason != "timeout" and self.game_task:
             self.game_task.cancel()
         
         # --- 第一個 Embed：遊戲資訊與盤面 ---
@@ -188,14 +199,16 @@ class LightsOutView(discord.ui.View):
             status_text = "失敗！"
             
         board_str = self.get_board_string()
+        goal_text = "全開" if self.target_state else "全關"
         
         embed1.description = (
             "**點燈遊戲**\n\n"
-            "過關獎勵：10\n\n"
+            "過關獎勵：10\n"
+            f"目標：{goal_text}\n\n"
             f"**{status_text}**\n\n"
             f"{board_str}"
         )
-        embed1.set_footer(text="陽子鴨小遊戲", icon_url=self.bot.user.display_avatar.url)
+        embed1.set_footer(text="陽子鴨", icon_url=self.bot.user.display_avatar.url)
         embed1.timestamp = discord.utils.utcnow()
         
         # --- 經濟系統處理 ---
@@ -234,9 +247,8 @@ class LightsOutGame(commands.Cog):
     async def play_lights_out(self, interaction: discord.Interaction):
         
         view = LightsOutView(interaction.user, self.bot)
-        instruction = (
-            "關燈"
-        )
+        goal_text = "全開" if view.target_state else "全關"
+        instruction = f"目標：把燈{goal_text}！"
         
         await interaction.response.send_message(content=instruction, view=view)
         view.message = await interaction.original_response()
