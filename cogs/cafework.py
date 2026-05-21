@@ -12,7 +12,7 @@ class CafeState:
         self.turn = 1
         self.max_turns = 10
         self.slime_weight = 1
-        self.log_message = "剛開門，還沒有客人來過。"
+        self.log_message = "開店ㄌ"
         
         self.current_customer = ""
         self.current_cups = 0
@@ -26,7 +26,7 @@ class CafeState:
         
         # 怪物權重保持不變，將一般人權重提升至 5
         # 初始總權重為 18，怪物出現機率為 1/18 (精準達到原本 1/6 的三分之一)
-        weights = [1, self.slime_weight, 1, 5, 5, 5]
+        weights = [1, self.slime_weight, 1, 3, 3, 3]
         
         self.current_customer = random.choices(customers, weights=weights, k=1)[0]
         
@@ -39,10 +39,10 @@ class CafeState:
         if self.insurance_cards > 0:
             self.insurance_cards -= 1
             self.profit -= 20
-            return "對方生氣地把你打了一頓！有健保，支付醫藥費 20 元 (消耗一張健保)。"
+            return "對方生氣地把你打了一頓！有健保，付ㄌ醫藥費 20 元"
         else:
             self.profit -= 200
-            return "對方生氣地把你打了一頓！沒有健保，慘賠醫藥費 200 元！"
+            return "對方生氣地把你打了一頓！沒有健保，賠ㄌ醫藥費 200 元"
 
     def sell(self):
         cost = self.current_cups * 10
@@ -84,22 +84,22 @@ class CafeState:
         return msg
 
     def reject(self):
-        msg = f"你拒絕了 {self.current_customer}。"
+        msg = f"你拒絕ㄌ {self.current_customer}。"
         if self.current_customer == "骷髏":
             if random.random() < 0.3:
                 msg += " " + self.handle_attack()
             else:
-                msg += " 傷心ㄉ走了"
+                msg += " 他低頭傷心ㄉ走了"
         elif self.current_customer == "史萊姆":
-            self.slime_weight *= 2
-            msg += " 史萊姆被拒絕後瘋狂分裂。(史萊姆出現率翻倍)"
+            self.slime_weight *= 3
+            msg += " 史萊姆瘋狂分裂。之後出現率翻3倍)"
         elif self.current_customer == "哥布林":
             if random.random() < 0.5:
                 msg += " " + self.handle_attack()
             else:
-                msg += " 傷心ㄉ走了"
+                msg += " 他低頭傷心ㄉ走了"
         else:
-            msg += " 傷心ㄉ走了"
+            msg += " 他哭著傷心ㄉ走了"
             
         return msg
 
@@ -162,11 +162,11 @@ class CafeGameView(discord.ui.View):
             economy_cog = self.bot.get_cog("Economy")
             if economy_cog:
                 economy_cog.update_balance(self.state.user.id, self.state.profit)
-                final_msg += f"賺ㄌ {self.state.profit} 元，已存入帳戶。"
+                final_msg += f"賺ㄌ {self.state.profit} 元"
             else:
                 final_msg += f"賺ㄌ {self.state.profit} 元 (但找不到經濟系統)。"
         else:
-            final_msg += f"你今天的總利潤為 {self.state.profit} 元。被開除ㄌ"
+            final_msg += f"總利潤為 {self.state.profit} 元。被開除ㄌ"
 
         await interaction.response.edit_message(content=final_msg, view=self)
         self.stop()
@@ -183,7 +183,7 @@ class CafeGameView(discord.ui.View):
         
         # 檢查拒絕次數是否已達上限
         if self.state.reject_count >= self.state.max_rejects:
-            await interaction.response.send_message("你的拒絕次數已達上限 (5次)", ephemeral=True)
+            await interaction.response.send_message("拒絕次數已達上限 (5次)", ephemeral=True)
             return
             
         # 紀錄拒絕次數並執行拒絕邏輯
@@ -248,8 +248,51 @@ class CafeWork(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="工作-咖啡廳", description="咖啡廳打工")
-    @app_commands.checks.cooldown(1, 20, key=lambda i: i.user.id)
-    async def start_cafe(self, interaction: discord.Interaction):
+    @app_commands.describe(介紹="遊戲介紹")
+    @app_commands.checks.cooldown(1, 120, key=lambda i: i.user.id)
+    async def start_cafe(self, interaction: discord.Interaction, 介紹: bool = False):
+        if 介紹:
+            
+            intro_text = (
+                "# 咖啡廳打工\n"
+                "共10 位客人，每杯咖啡成本 10 元\n"
+                "共5 次拒絕客人的機會\n\n"
+                
+                "**健保卡與醫藥費**\n"
+                "每張健保卡售價 30 元\n"
+                "若拒絕客人遭到攻擊：\n"
+                "無健保：醫藥費 200 元\n"
+                "有健保：消耗 1 張健保卡，醫藥費降為 20 元。\n\n"
+                
+                "圖鑑\n"
+                "**骷髏** (出現機率 1/12) - 買 1~5 杯\n"
+                "不付錢\n"
+                "拒絕：30% 機率打人\n\n"
+                
+                "**史萊姆** (出現機率 1/12) - 買 1~5 杯\n"
+                "每杯固定付 5 元\n"
+                "拒絕：之後出現率翻 3 倍\n\n"
+                
+                "* 哥布林(出現機率 1/12) - 買 1~5 杯\n"
+                "每杯隨機付 3~7 元(同個人每杯都付同樣價錢)\n"
+                "拒絕：50% 機率打人。\n\n"
+                
+                "**乞丐** (出現機率 3/12) - 買 1~5 杯\n"
+                "隨機付 0~30 元(同個人每杯都付同樣價錢)\n"
+                "拒絕：沒事\n\n"
+                
+                "**富人** (出現機率 3/12) - 固定買 1 杯\n"
+                "90% 付 10 元，9.99% 付 50 元，0.01% 機率付 1000 元\n"
+                "拒絕：沒事\n\n"
+                
+                "**強盜** (出現機率 3/12) - 固定買 1 杯\n"
+                " 50%付 30 元，50% 搶走 30 元且賠咖啡成本\n"
+                "拒絕：沒事"
+            )
+            await interaction.response.send_message(content=intro_text, ephemeral=True)
+            return
+
+        # 正常遊戲邏輯
         state = CafeState(interaction.user)
         view = InsuranceView(state, self.bot)
         
