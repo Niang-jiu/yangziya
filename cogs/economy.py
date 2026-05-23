@@ -2,16 +2,18 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from pymongo import MongoClient
-import os  # 👈 引入 os 模組來讀取環境變數
+import os
+import certifi  # 👈 1. 新增引入這個憑證套件
 
 class Economy(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # 👈 直接從 .env 抓取連線字串，密碼不再外流！
+        
         self.mongo_uri = os.getenv('MONGODB_URI')
         
-        # 建立資料庫連線
-        self.client = MongoClient(self.mongo_uri)
+        # 👈 2. 這裡加上 tlsCAFile=certifi.where()，這是解決 Windows SSL 報錯的關鍵！
+        self.client = MongoClient(self.mongo_uri, tlsCAFile=certifi.where())
+        
         self.db = self.client['discord_bot']  # 資料庫名稱
         self.collection = self.db['economy']  # 集合名稱
         
@@ -34,6 +36,7 @@ class Economy(commands.Cog):
             upsert=True
         )
         return True
+
 
     # ==========================
     # Discord 指令區
